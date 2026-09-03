@@ -8,10 +8,7 @@
 #include <chrono>
 #include <thread>
 
-const hal::PinId hal::pins::imu_cs   = 0;
-const hal::PinId hal::pins::imu_sck  = 1;
-const hal::PinId hal::pins::imu_miso = 2;
-const hal::PinId hal::pins::imu_mosi = 3;
+const hal::PinId hal::pins::imu_cs = 0;
 
 namespace hal {
 namespace {

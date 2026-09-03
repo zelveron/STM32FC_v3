@@ -40,7 +40,6 @@ Print* s_log = nullptr;   // -> usb_stream::log(), set in setup()
 void setup()
 {
     hal::init();
-    bmi323::config_pins();
 
     usb_stream::begin();
     ublox::begin(kGpsBootBaud);
@@ -163,7 +162,11 @@ void loop()
         last_bmi = millis();
 
         bmi323::Sample s;
-        if (bmi323::read(s)) {
+        const bmi323::Result r = bmi323::read(s);
+        if (r == bmi323::Result::comm_error) {
+            s_bmi_ready = false;   // re-initialise next pass
+            Log.println(F("BMI_STATUS,0"));
+        } else if (r == bmi323::Result::ok) {
             const uint32_t now_us = micros();
             const float dt_s = (att_last_us == 0) ? 0.01f
                                                   : (float)(now_us - att_last_us) * 1e-6f;
@@ -180,10 +183,8 @@ void loop()
             Log.print(s.gx_dps, 2); Log.print(',');
             Log.print(s.gy_dps, 2); Log.print(',');
             Log.println(s.gz_dps, 2);
-        } else {
-            s_bmi_ready = false;   // re-initialise next pass
-            Log.println(F("BMI_STATUS,0"));
         }
+        // Result::no_data -> nothing fresh this tick, keep last values
     }
 
     // --- Attitude output at ~20 Hz -----------------------------------

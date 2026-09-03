@@ -126,3 +126,20 @@ the DWT counter. Portable -- built and asserted by `[env:native]`
 (`main_native.cpp`: 100 Hz task runs 50x / 20 Hz runs 10x over 500 ms).
 NOT yet wired into `main_stm32.cpp` -- the streamer loop adopts it in the CRSF
 session, when CRSF parse becomes the first real scheduled task.
+
+**2026-09-03 — BMI323 moved to hardware SPI; bit-bang deleted.** The
+`imu_probe` verified hardware SPI at 10 MHz: 0 chip-ID errors, 0 comm failures
+over 1.4M reads (the ~0.04% large-accel-delta "glitches" were register tearing
+from polling 8x above the ODR with no DRDY gate -- a probe artifact, not a link
+fault; chip-ID on the same wire was perfect and the rate was flat across clock
+speed). `hal::spi_config`/`spi_xfer` implemented on SPI1 via the core's polled
+LL block transfer (`SPI.transfer(tx,rx,n)`), ~45 us for a 28-byte burst vs
+1436 us bit-bang. `drivers/bmi323` rewritten: hardware-SPI Bosch callbacks,
+`begin()` owns SPI setup, `read()` is DRDY-gated (`bmi3_get_sensor_status` ->
+`Result::{ok,no_data,comm_error}`), flight config 1600 Hz ODR / +/-8 g / 2000
+dps / high-perf / internal filter on. `bb_xfer` and the bit-bang read/write
+callbacks removed; `hal::pins::imu_sck/miso/mosi` and `bmi323::config_pins()`
+removed; `hal::gpio_*` kept only for CS. SPI clock: 8 MHz request -> ~5.25 MHz
+actual (SPI1 APB2/16), inside the 10 MHz datasheet limit. `spi_xfer_async`
+(DMA) still returns unsupported -- next optimisation, with a raw-sample spike
+filter. Build green on both envs; hardware-flash verification pending.

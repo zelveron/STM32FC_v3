@@ -8,14 +8,12 @@
 
 #include <Arduino.h>
 #include <Wire.h>
+#include <SPI.h>
 
 // ---------------------------------------------------------------------------
 // Named pins (declared extern in hal.hpp)
 // ---------------------------------------------------------------------------
-const hal::PinId hal::pins::imu_cs   = PA4;
-const hal::PinId hal::pins::imu_sck  = PA5;
-const hal::PinId hal::pins::imu_miso = PA6;
-const hal::PinId hal::pins::imu_mosi = PA7;
+const hal::PinId hal::pins::imu_cs = PA4;   // SCK/MISO/MOSI = PA5/PA6/PA7 (SPI1)
 
 namespace hal {
 
@@ -68,14 +66,43 @@ void gpio_write(PinId pin, bool level) { ::digitalWrite(pin, level ? HIGH : LOW)
 bool gpio_read (PinId pin)             { return ::digitalRead(pin) != LOW; }
 
 // ---------------------------------------------------------------------------
-// SPI -- not implemented. The IMU is on the bit-bang GPIO path until the
-// BMI323 solder joints are reflowed and hardware SPI at 10 MHz is verified
-// (README blocker #1). Real SPI1 + DMA lands in that session.
+// SPI -- SPI1 (PA5/PA6/PA7) for the BMI323, blocking. The transfer is a tight
+// polled LL loop inside the core (~1 byte / SPI clock), so a 27-byte IMU burst
+// at 5.25 MHz is ~45 us. DMA (spi_xfer_async) is a later optimisation.
 // ---------------------------------------------------------------------------
-Status spi_config    (SpiBus, uint32_t, uint8_t)                 { return Status::unsupported; }
-Status spi_xfer      (SpiBus, PinId, const uint8_t*, uint8_t*, size_t) { return Status::unsupported; }
+static SPISettings s_spi_settings;
+static bool        s_spi_ready = false;
+
+Status spi_config(SpiBus bus, uint32_t hz, uint8_t mode)
+{
+    if (bus != SpiBus::imu) return Status::unsupported;
+    const uint8_t m = (mode == 0) ? SPI_MODE0 : (mode == 1) ? SPI_MODE1
+                    : (mode == 2) ? SPI_MODE2 : SPI_MODE3;
+    s_spi_settings = SPISettings(hz, MSBFIRST, m);
+    SPI.setMOSI(PA7);
+    SPI.setMISO(PA6);
+    SPI.setSCLK(PA5);
+    SPI.begin();
+    s_spi_ready = true;
+    return Status::ok;
+}
+
+Status spi_xfer(SpiBus bus, PinId cs, const uint8_t* tx, uint8_t* rx, size_t n)
+{
+    if (bus != SpiBus::imu || !s_spi_ready || n == 0) return Status::error;
+
+    SPI.beginTransaction(s_spi_settings);
+    ::digitalWrite(cs, LOW);
+    if (tx && rx)      SPI.transfer(tx, rx, n);
+    else if (rx)       { for (size_t i = 0; i < n; i++) rx[i] = SPI.transfer(0x00); }
+    else               { for (size_t i = 0; i < n; i++) SPI.transfer(tx ? tx[i] : 0x00); }
+    ::digitalWrite(cs, HIGH);
+    SPI.endTransaction();
+    return Status::ok;
+}
+
 Status spi_xfer_async(SpiBus, PinId, const uint8_t*, uint8_t*, size_t) { return Status::unsupported; }
-bool   spi_busy      (SpiBus)                                    { return false; }
+bool   spi_busy      (SpiBus) { return false; }
 
 // ---------------------------------------------------------------------------
 // I2C -- BMP581 on I2C1 (PB6/PB7)

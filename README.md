@@ -102,37 +102,29 @@ registers directly. Do not use `analogWrite`.
 
 ## Blockers before flight code
 
-### 1. BMI323 bit-bang SPI must be fixed in hardware
+### 1. ~~BMI323 bit-bang SPI~~ — moved to hardware SPI
 
-The BMI323's solder joints are **marginal**. Hardware SPI fails even at 1 MHz
-(chip ID reads `0xFF` = MISO floating). It currently only works via the
-bit-bang implementation in `src/drivers/bmi323.cpp` (`bb_xfer()`):
+**History:** the BMI323's solder joints were marginal — hardware SPI failed
+(chip ID `0xFF`), so the driver bit-banged SPI at ~200 kHz. One accel+gyro
+read cost **~1.4 ms of blocking CPU** (measured), which caps sampling at
+~700 Hz and burns 70–98% of the core. Disqualifying for flight.
 
-- `bb_xfer()` — bit-bangs one byte (mode 0, `hal::delay_us(2)` per edge)
-- `spi_read()` / `spi_write()` — CS + bit-bang, wired to the Bosch driver
-- `raw_chip_id()` — raw reg 0x00 read (`0x43` = present)
+**Now:** after solder rework, the `imu_probe` firmware verified hardware SPI
+at 10 MHz: **0 chip-ID errors and 0 comm failures over 1.4 million reads**.
+The link is solid. (A residual ~0.04% of samples showed large accel deltas —
+that is register *tearing* from the probe polling 8× faster than the ODR with
+no data-ready gate, not a bus fault: chip-ID on the same wire was perfect, the
+rate was flat across 1/4/8/10 MHz, and the rework didn't change it.)
 
-**This is disqualifying for flight.** The Bosch core reads 26 data bytes + a
-dummy + the address per sample = 28 byte-transfers. At bit-bang speed one
-accel+gyro read costs **~1.1–1.7 ms of blocking CPU** (the old README's
-"~500 µs" figure assumed only 6+6 data bytes and was wrong). Flight control
-needs 1 kHz sampling — one read already exceeds a 1 ms tick budget by itself.
-Hardware SPI at 10 MHz does the same read in ~10 µs, and with DMA it costs
-essentially nothing.
+`src/drivers/bmi323.cpp` now uses **SPI1 (PA5/6/7), CS PA4, ~5.25 MHz,
+blocking** — a 28-byte burst is ~45 µs. Reads are **data-ready gated** so there
+is no tearing. Config: 1600 Hz ODR both sensors, internal filter on, ±8 g accel,
+2000 dps gyro, high-perf mode. Bit-bang code and `hal::gpio` bus shim are
+deleted.
 
-The failure signature (bit-bang OK at 200 kHz, hardware SPI fails at 1 MHz) is a
-textbook resistive cold joint: the weak connection plus pin capacitance forms an
-RC filter that smears edges.
-
-**Fix:**
-1. Reflow VDD, VDDIO, GND and especially **SDO** with fresh flux.
-2. Check the init does a dummy read (CS falling edge) to latch the BMI3xx into
-   SPI mode — part of the problem may not be solder at all.
-3. If reflow fails, hot-air the chip off and replace it. It costs a few euros.
-4. **Verify before proceeding:** chip ID `0x43` at 10 MHz, then several million
-   reads with zero mismatches.
-
-Do **not** replace the bit-bang code with hardware SPI until this passes.
+**Still to do:** FIFO + DMA (`hal::spi_xfer_async`) to take the read cost from
+~45 µs to ~1 µs and decouple it from the ODR; a raw-sample spike filter.
+Hardware-flash verification of this driver is pending (build is green).
 
 ### 2. Sampling rates are datalogger rates
 

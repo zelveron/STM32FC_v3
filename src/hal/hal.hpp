@@ -45,11 +45,9 @@ enum class ResetCause : uint8_t {
 using PinId = uint32_t;
 
 namespace pins {
-// The four IMU pins, needed only by the temporary BMI323 bit-bang driver.
+// IMU chip-select. SCK/MISO/MOSI are owned by the SPI peripheral (SpiBus::imu)
+// and never touched as GPIO.
 extern const PinId imu_cs;
-extern const PinId imu_sck;
-extern const PinId imu_miso;
-extern const PinId imu_mosi;
 } // namespace pins
 
 // --------------------------------------------------------------------------
@@ -80,7 +78,7 @@ void watchdog_start(uint32_t timeout_ms);
 void watchdog_kick();
 
 // --------------------------------------------------------------------------
-// GPIO -- exists only for the BMI323 bit-bang shim. Delete at reflow.
+// GPIO -- chip-selects and the odd status line. Not a bit-bang bus.
 // --------------------------------------------------------------------------
 
 void gpio_config(PinId pin, PinMode mode);
