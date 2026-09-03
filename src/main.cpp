@@ -2,8 +2,10 @@
  * STM32F407VET6 - BMP581 + BMI323 real-time streamer
  *
  *   BMP581 : I2C1  PB6=SCL, PB7=SDA @0x47  (pressure / temp / altitude)
- *   BMI323 : SPI1  PA5=SCK, PA6=MISO, PA7=MOSI, PA4=CS (accel / gyro)
- *   uBlox  : USART1 PA9=TX, PA10=RX (NMEA), en PE10
+ *   BMI323 : SPI1  PA5=SCK, PA6=MISO, PA7=MOSI, PA4=CS (accel / gyro, bit-bang)
+ *   uBlox  : USART1 PA9=TX, PA10=RX (NMEA, crossed wiring)
+ *
+ * No sensor has an enable/power pin -- all sensors are always on.
  *
  * Output over USB CDC ("SerialUSB"), tagged CSV lines:
  *   BMP,<pressure_hPa>,<temperature_C>,<altitude_m>
@@ -28,8 +30,6 @@
 #include "bmi323.h"
 #include <STM32SD.h>
 
-#define BMP_EN     PB11
-#define BMP_EN_ALT PE11
 #define BMI_CS     PA4
 #define BMI_SCK    PA5
 #define BMI_MISO   PA6
@@ -538,14 +538,6 @@ static char sd_log_name[16];
 
 void setup(void)
 {
-    pinMode(BMP_EN_ALT, OUTPUT); digitalWrite(BMP_EN_ALT, HIGH);
-    pinMode(BMP_EN, OUTPUT);     digitalWrite(BMP_EN, HIGH);
-
-    /* PC14: ALS enable (OSC32 pin - drive via registers) */
-    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;
-    GPIOC->MODER = (GPIOC->MODER & ~(3UL << 28)) | (1UL << 28);
-    GPIOC->BSRR = (1UL << 14);
-
     pinMode(BMI_CS, OUTPUT);   digitalWrite(BMI_CS, HIGH);
     pinMode(BMI_SCK, OUTPUT);  digitalWrite(BMI_SCK, LOW);
     pinMode(BMI_MOSI, OUTPUT); digitalWrite(BMI_MOSI, LOW);
