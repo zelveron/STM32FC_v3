@@ -20,7 +20,6 @@
 
 #include <Arduino.h>
 #include <Wire.h>
-#include <SPI.h>
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
@@ -88,24 +87,6 @@ static bool bmp5_begin(void)
 
     if (bmp5_set_osr_odr_press_config(&bmp_cfg, &bmp_dev) != BMP5_OK) return false;
     return true;
-}
-
-/* Scan the I2C bus and report ACKing 7-bit addresses (0x08..0x7F). */
-static void i2c_scan(void)
-{
-    SerialUSB.print(F("I2C_SCAN,"));
-    bool first = true;
-    for (uint16_t addr = 8; addr <= 0x7F; addr++)
-    {
-        Wire.beginTransmission((uint8_t)addr);
-        if (Wire.endTransmission() == 0)
-        {
-            if (!first) SerialUSB.print(',');
-            SerialUSB.print(addr, HEX);
-            first = false;
-        }
-    }
-    SerialUSB.println();
 }
 
 /* ------------------------------------------------------------------------- */
@@ -323,41 +304,6 @@ static void ubx_enable_nmea(void)
     ubx_send(0x06, 0x00, prt, sizeof(prt));
 }
 
-/* Count signal edges on a pin over a window (microseconds). */
-static uint32_t pin_edge_count(int pin, uint32_t window_us)
-{
-    uint32_t edges = 0;
-    int last = digitalRead(pin);
-    uint32_t t0 = micros();
-    while ((micros() - t0) < window_us)
-    {
-        int cur = digitalRead(pin);
-        if (cur != last)
-        {
-            edges++;
-            last = cur;
-        }
-    }
-    return edges;
-}
-
-/* Count edges on two pins concurrently over a window (microseconds). */
-static void pin_edge_count2(int p1, int p2, uint32_t window_us,
-                            uint32_t *e1, uint32_t *e2)
-{
-    uint32_t n1 = 0, n2 = 0;
-    int l1 = digitalRead(p1), l2 = digitalRead(p2);
-    uint32_t t0 = micros();
-    while ((micros() - t0) < window_us)
-    {
-        int c1 = digitalRead(p1);
-        if (c1 != l1) { n1++; l1 = c1; }
-        int c2 = digitalRead(p2);
-        if (c2 != l2) { n2++; l2 = c2; }
-    }
-    *e1 = n1; *e2 = n2;
-}
-
 /* Drain USART1 RX into the boot-burst capture buffer. */
 static void gps_drain(void)
 {
@@ -556,8 +502,6 @@ void setup(void)
     gps_drain();
     SerialUSB.println(F("boot: BMP581 + BMI323 + uBlox + SD streamer"));
 
-    /* One-time I2C bus scan. */
-    i2c_scan();
     gps_drain();
 
     /* --- SD card (SDIO 4-bit) + log file -------------------------------- */
@@ -630,31 +574,6 @@ void loop(void)
         last_ubx = millis();
         ubx_poll_monver();
         ubx_enable_nmea();
-    }
-
-    /* Wiring diagnostic: listen on PA9 (swap test) + PA10 (RX-present test)
-       every ~4 s. Edges > ~5 mean data traffic on that pin. */
-    static uint32_t last_pa = 0;
-    if ((millis() - last_pa) >= 4000)
-    {
-        last_pa = millis();
-        uint32_t cur_baud = GPS_BAUDS[gps_baud_idx];
-        Serial1.end();
-        pinMode(PA9, INPUT_PULLUP);
-        uint32_t e9 = pin_edge_count(PA9, 50000);    /* 50 ms window */
-        int l9 = digitalRead(PA9);
-        pinMode(PA10, INPUT_PULLUP);
-        uint32_t e10 = pin_edge_count(PA10, 50000);  /* 50 ms window */
-        int l10 = digitalRead(PA10);
-        gps_uart_begin(cur_baud);
-        SerialUSB.print(F("PA_EDGES,"));
-        SerialUSB.print(e9);
-        SerialUSB.print(',');
-        SerialUSB.print(l9);
-        SerialUSB.print(',');
-        SerialUSB.print(e10);
-        SerialUSB.print(',');
-        SerialUSB.println(l10);
     }
 
     /* Debug: report rx byte count / baud / lock state every 2 s. */
