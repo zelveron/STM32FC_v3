@@ -106,11 +106,11 @@ registers directly. Do not use `analogWrite`.
 
 The BMI323's solder joints are **marginal**. Hardware SPI fails even at 1 MHz
 (chip ID reads `0xFF` = MISO floating). It currently only works via the
-bit-bang implementation in `src/main.cpp`:
+bit-bang implementation in `src/drivers/bmi323.cpp` (`bb_xfer()`):
 
-- `bmi_bb_xfer()` — bit-bangs one byte (mode 0, `delayMicroseconds(2)` per edge)
-- `bmi3_spi_read()` / `bmi3_spi_write()` — CS + bit-bang, wired to the Bosch driver
-- `bmi_raw_chip_id()` — raw reg 0x00 read (`0x43` = present)
+- `bb_xfer()` — bit-bangs one byte (mode 0, `hal::delay_us(2)` per edge)
+- `spi_read()` / `spi_write()` — CS + bit-bang, wired to the Bosch driver
+- `raw_chip_id()` — raw reg 0x00 read (`0x43` = present)
 
 **This is disqualifying for flight.** The Bosch core reads 26 data bytes + a
 dummy + the address per sample = 28 byte-transfers. At bit-bang speed one
@@ -144,10 +144,13 @@ Do **not** replace the bit-bang code with hardware SPI until this passes.
 | u-blox | NMEA 9600, 1 Hz | **UBX binary, 115200, 5 Hz, `UBX-NAV-PVT`** | One message gives position, NED velocity, fix type, sats and accuracy. NED velocity is what the nav filter needs. |
 | SD log | CSV, 50 Hz, 1-bit @ 4 MHz | **binary, ring buffer, 512-byte aligned, 4-bit** | `sprintf` of 15 floats costs hundreds of µs. First flights need raw gyro at 500–1000 Hz for FFT. |
 
-### 3. Everything lives in one file
+### 3. ~~Everything lives in one file~~ — done
 
-`src/main.cpp` holds all firmware. It must be split into the layered structure
-in `CLAUDE.md` before any control code is added.
+`src/main.cpp` has been split into the `CLAUDE.md` layered layout: `hal/`
+(interface + `stm32/` and `native/` backends), `drivers/` (bmi323, bmp581,
+ublox), `estimation/ahrs`, `core/` (bench `usb_stream` + `sd_csv_log`),
+`main_stm32.cpp`. `[env:native]` builds the portable layers. The bit-bang IMU
+transfer still blocks (blocker #1) — the split does not change that.
 
 ---
 

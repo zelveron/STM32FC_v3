@@ -136,7 +136,7 @@ Do not start work on estimation, control, or flight modes until these are
 resolved. If asked to, say so and refuse.
 
 1. **BMI323 is on bit-bang SPI at ~200 kHz** because of marginal solder joints
-   (`bmi_bb_xfer()` in `src/main.cpp`). The Bosch core reads 26 data bytes plus
+   (`bb_xfer()` in `src/drivers/bmi323.cpp`). The Bosch core reads 26 data bytes plus
    a dummy plus the address per sample = 28 byte-transfers; at bit-bang speed
    that is **~1.1–1.7 ms of blocking CPU per accel+gyro read**, not the ~500 µs
    the old README claimed. A flight controller needs 1 kHz sampling; one read
@@ -147,8 +147,9 @@ resolved. If asked to, say so and refuse.
    mismatches).
 2. **Sampling rates are datalogger rates, not flight rates.** Gyro at 200 Hz
    ODR / ~100 Hz sampled, baro at ~10 Hz, GPS at 1 Hz NMEA. See targets below.
-3. **Everything is in one file** (`src/main.cpp`). Must be split into the target
-   layout before control code is added.
+3. ~~Everything is in one file.~~ **Done** — `src/main.cpp` is split into the
+   layout below (`hal/`, `drivers/`, `estimation/`, `core/`, `main_stm32.cpp`),
+   `[env:native]` added. The bit-bang IMU blocking (blocker 1) is unchanged.
 
 ---
 
@@ -186,6 +187,10 @@ These are not style preferences. Violating them is a bug.
    Everything in `src/core/`, `src/estimation/`, `src/control/` and `src/modes/`
    must compile on the native desktop target. Need hardware? Add a method to the
    `hal::` interface and implement it in *both* backends.
+   *Documented exception:* `src/core/usb_stream.*` and `src/core/sd_csv_log.*`
+   are throwaway bench scaffolding (USB CDC telemetry + CSV SD log) that use
+   Arduino directly and are excluded from `[env:native]`. They are deleted when
+   the USB path goes. Do not add more exceptions; do not "fix" these.
 2. **No dynamic allocation after `init()`.** No `malloc`, `new`, `String`,
    `std::vector`, `std::string`, `std::function`. Fixed-size arrays and static
    storage only. No exceptions, no RTTI.
@@ -229,15 +234,18 @@ These are not style preferences. Violating them is a bug.
 ```
 src/
   hal/              hardware abstraction — the ONLY layer touching STM32/Arduino
-    hal.hpp         the interface both backends implement
-    stm32/          real hardware (may call HAL_*/LL_* directly)
-    native/         desktop backend for tests and SITL
-  drivers/          bmi323, bmp581, ublox, crsf, esc_out — depend on hal only
-  core/             scheduler, params, logger, failsafe
-  estimation/       ins, ahrs, baro_alt, nav_filter
+    hal.hpp         the interface both backends implement          [exists]
+    stm32/          real hardware (may call HAL_*/LL_* directly)    [exists]
+    native/         desktop backend for tests and SITL             [exists]
+  drivers/          bmi323, bmp581, ublox [exist]; crsf, esc_out — depend on hal only
+  core/             scheduler, params, logger, failsafe [none yet];
+                    usb_stream, sd_csv_log [exist, BENCH — see rule 1 exception]
+  estimation/       ahrs [exists]; ins, baro_alt, nav_filter
   control/          pid, rate_ctrl, attitude_ctrl, tecs, nav_l1, mixer
   modes/            mode.hpp + mode_manual, mode_assist, mode_auto
   sitl/             6DOF model + native main
+  main_stm32.cpp    application entry (setup/loop)                  [exists]
+  main_native.cpp   [env:native] entry                             [exists]
 lib/                vendored: bmi323, bmp5, STM32SD, FatFs  (see README)
 tests/              native unit tests
 tools/              gui.py, capture.py, log parsers, plotters
@@ -246,8 +254,13 @@ docs/DECISIONS.md   one paragraph per design decision, append-only
 
 We stay on **PlatformIO + Arduino framework** for now. The STM32 Arduino core is
 built on STM32Cube HAL, so timing-critical drivers can call `HAL_*` / `LL_*`
-directly without abandoning the working SD stack. Add an `[env:native]` for
-desktop tests and SITL.
+directly without abandoning the working SD stack.
+
+Two build envs (`platformio.ini`):
+- `black_f407ve` — the firmware. Excludes `main_native.cpp`, `hal/native/`.
+- `native` — portable layers only (`hal.hpp` + `drivers/` + `estimation/` +
+  `hal/native/` + `main_native.cpp`). Proves those layers stay Arduino-free.
+  Excludes `main_stm32.cpp`, `hal/stm32/`, `core/`.
 
 ---
 

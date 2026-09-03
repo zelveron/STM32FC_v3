@@ -89,3 +89,24 @@ called), `pin_edge_count()` and the `PA_EDGES` block (two 50 ms busy-waits every
 `GPS_DBG` / `GPS_FIRST` / `GPS_RAW` prints stay for now — GPS still has no
 indoor fix and they are cheap — and will be removed with the rest of the USB
 path.
+
+**2026-09-03 — main.cpp split into the layered layout (one commit).** `src/main.cpp`
+(870 lines) is replaced by: `hal/hal.hpp` (full interface -- time, gpio, spi
+blocking+DMA, i2c, uart, pwm, block device, reset cause, bootloader jump) with
+`hal/stm32/` and `hal/native/` backends; `drivers/{bmi323,bmp581,ublox}`
+(hal-only, portable, compiled by `[env:native]`); `estimation/ahrs`; the two
+bench modules `core/{usb_stream,sd_csv_log}` (Arduino-coupled, native-excluded --
+rule 1 documented exception); `main_stm32.cpp` (setup/loop composition +
+bench prints) and `main_native.cpp` (smoke). Pure refactor: `black_f407ve`
+emits the same tagged CSV at the same cadences. Known, accepted deltas: (a) if
+two GGA sentences land in one `loop()` pass, GPS_STAT/GPS now print once with the
+later values instead of twice -- cannot happen at 1 Hz NMEA; (b) UBX TX is now
+non-blocking (drops a frame if the UART TX ring is full instead of busy-waiting)
+-- frames are <=28 B into a 64 B ring every 2 s, so it never actually drops;
+(c) `Wire.begin()` now runs inside `bmp581::begin()` after the USB-host wait
+instead of before it -- nothing uses I2C in between. SPI/PWM/block-device hal
+calls are declared but return `Status::unsupported` (no caller yet: SPI waits on
+the BMI323 reflow, PWM on Phase 2, block device on the binary logger).
+`reset_cause()` and `jump_to_bootloader()` are implemented for real (F407
+`RCC->CSR` decode; system-memory `0x1FFF0000` entry) though nothing calls them
+yet -- they are the two "debugging without a debugger" early tasks.
