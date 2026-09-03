@@ -74,9 +74,13 @@ on the bench with the board in its final airframe orientation, recorded in
 never scattered through the estimator or mixer. No control code lands before
 this exists.
 
-**2026-09-03 — `Wire` (BMP581 I2C) gets a bounded timeout.** `Wire.setTimeout()`
-is set in `setup()` so a stuck bus cannot hang the HAL default. Belt-and-braces
-until the I2C path becomes a hal-backed state machine.
+**2026-09-03 — `Wire` (BMP581 I2C) timeout shortened.** The STM32 core already
+bounds every I2C transfer at `I2C_TIMEOUT_TICK` (default 100 ≈ 100 ms) — the
+earlier claim of "no bounded timeout" was wrong — but there is no runtime API to
+shorten it, so a wedged bus still stalls the loop for 100 ms. Set
+`-D I2C_TIMEOUT_TICK=10` in `platformio.ini` (a 6-byte BMP581 read is <1 ms, so
+10 ms is very generous). The real fix is a hal-backed non-blocking I2C state
+machine, later.
 
 **2026-09-03 — Dead bench diagnostics removed.** `pin_edge_count2()` (never
 called), `pin_edge_count()` and the `PA_EDGES` block (two 50 ms busy-waits every
