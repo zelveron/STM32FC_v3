@@ -37,6 +37,60 @@
 static const uint8_t BMP5_ADDR = 0x47;
 
 /* ------------------------------------------------------------------------- */
+/* Non-blocking line logger over USB CDC                                     */
+/*                                                                          */
+/* SerialUSB.write() busy-waits up to USB_CDC_TRANSMIT_TIMEOUT (3 ms) per    */
+/* call when the host is connected but not draining, and can emit half      */
+/* lines. This buffers one line and pushes it only if it fits the CDC TX    */
+/* queue whole; otherwise the line is dropped and counted. Never blocks,    */
+/* never emits a partial line.                                              */
+/*                                                                          */
+/* Bench scaffolding only -- deleted when the USB path is removed. The CDC  */
+/* TX queue is enlarged via -D CDC_TRANSMIT_QUEUE_BUFFER_PACKET_NUMBER so   */
+/* the longest debug line still fits in one atomic push.                    */
+/* ------------------------------------------------------------------------- */
+class NbLog : public Print
+{
+public:
+    size_t write(uint8_t c) override
+    {
+        if (c == '\n') { flush_line(); return 1; }
+        if (_len < sizeof(_buf)) _buf[_len++] = (char)c;
+        else                     _overflow = true;
+        return 1;
+    }
+    size_t write(const uint8_t *b, size_t n) override
+    {
+        for (size_t i = 0; i < n; i++) write(b[i]);
+        return n;
+    }
+    uint32_t drops() const { return _drops; }
+
+private:
+    void flush_line(void)
+    {
+        if (!_overflow && SerialUSB.availableForWrite() >= (int)(_len + 1))
+        {
+            SerialUSB.write((const uint8_t *)_buf, _len);
+            SerialUSB.write((uint8_t)'\n');
+        }
+        else
+        {
+            _drops++;
+        }
+        _len = 0;
+        _overflow = false;
+    }
+
+    char     _buf[288];
+    uint16_t _len = 0;
+    bool     _overflow = false;
+    uint32_t _drops = 0;
+};
+
+static NbLog Log;
+
+/* ------------------------------------------------------------------------- */
 /* BMP581 (I2C)                                                              */
 /* ------------------------------------------------------------------------- */
 
@@ -458,14 +512,14 @@ static bool gps_process_line(char *line)
     if ((millis() - last_gps_stat) >= 1000)
     {
         last_gps_stat = millis();
-        SerialUSB.print(F("GPS_STAT,"));
-        SerialUSB.print(fix);
-        SerialUSB.print(',');
-        SerialUSB.print(sats);
-        SerialUSB.print(',');
-        SerialUSB.print(gps_time_str);
-        SerialUSB.print(',');
-        SerialUSB.println(gps_speed_kmh, 1);
+        Log.print(F("GPS_STAT,"));
+        Log.print(fix);
+        Log.print(',');
+        Log.print(sats);
+        Log.print(',');
+        Log.print(gps_time_str);
+        Log.print(',');
+        Log.println(gps_speed_kmh, 1);
     }
 
     if (f[2][0] == '\0' || f[4][0] == '\0') return false;
@@ -480,20 +534,20 @@ static bool gps_process_line(char *line)
 
     float gps_alt = atof(f[9]);
 
-    SerialUSB.print(F("GPS,"));
-    SerialUSB.print(lat, 6);
-    SerialUSB.print(',');
-    SerialUSB.print(lon, 6);
-    SerialUSB.print(',');
-    SerialUSB.print(gps_alt, 1);
-    SerialUSB.print(',');
-    SerialUSB.print(sats);
-    SerialUSB.print(',');
-    SerialUSB.print(fix);
-    SerialUSB.print(',');
-    SerialUSB.print(gps_time_str);
-    SerialUSB.print(',');
-    SerialUSB.println(gps_speed_kmh, 1);
+    Log.print(F("GPS,"));
+    Log.print(lat, 6);
+    Log.print(',');
+    Log.print(lon, 6);
+    Log.print(',');
+    Log.print(gps_alt, 1);
+    Log.print(',');
+    Log.print(sats);
+    Log.print(',');
+    Log.print(fix);
+    Log.print(',');
+    Log.print(gps_time_str);
+    Log.print(',');
+    Log.println(gps_speed_kmh, 1);
     return true;
 }
 
@@ -530,11 +584,11 @@ void setup(void)
     for (int i = 0; i < 300 && !SerialUSB; i++) { gps_drain(); delay(10); }
     delay(100);
     gps_drain();
-    SerialUSB.println(F("boot: BMP581 + BMI323 + uBlox + SD streamer"));
+    Log.println(F("boot: BMP581 + BMI323 + uBlox + SD streamer"));
 
     /* BMP581 is initialised once here, not retried from loop(). */
     bmp_ok = bmp5_begin();
-    SerialUSB.println(bmp_ok ? F("BMP_STATUS,1") : F("BMP_STATUS,0"));
+    Log.println(bmp_ok ? F("BMP_STATUS,1") : F("BMP_STATUS,0"));
     gps_drain();
 
     /* --- SD card (SDIO 4-bit) + log file -------------------------------- */
@@ -550,18 +604,18 @@ void setup(void)
         {
             sd_file.println(F("t_ms,ax,ay,az,gx,gy,gz,roll,pitch,yaw,press_hPa,temp_c,alt_m,gps_time,gps_sats,gps_speed_kmh"));
             sd_file.flush();
-            SerialUSB.print(F("SD_STATUS,1,"));
-            SerialUSB.println(sd_log_name);
+            Log.print(F("SD_STATUS,1,"));
+            Log.println(sd_log_name);
         }
         else
         {
             sd_ok = false;
-            SerialUSB.println(F("SD_STATUS,0,open_failed"));
+            Log.println(F("SD_STATUS,0,open_failed"));
         }
     }
     else
     {
-        SerialUSB.println(F("SD_STATUS,0,begin_failed"));
+        Log.println(F("SD_STATUS,0,begin_failed"));
     }
 }
 
@@ -614,12 +668,12 @@ void loop(void)
     if ((millis() - last_gps_dbg) >= 2000)
     {
         last_gps_dbg = millis();
-        SerialUSB.print(F("GPS_DBG,"));
-        SerialUSB.print(gps_rx_bytes);
-        SerialUSB.print(',');
-        SerialUSB.print(GPS_BAUDS[gps_baud_idx]);
-        SerialUSB.print(',');
-        SerialUSB.println(gps_locked ? 1 : 0);
+        Log.print(F("GPS_DBG,"));
+        Log.print(gps_rx_bytes);
+        Log.print(',');
+        Log.print(GPS_BAUDS[gps_baud_idx]);
+        Log.print(',');
+        Log.println(gps_locked ? 1 : 0);
     }
 
     /* Show captured uBlox boot bytes (hex) every 3 s. */
@@ -627,15 +681,15 @@ void loop(void)
     if ((millis() - last_gps_first) >= 3000)
     {
         last_gps_first = millis();
-        SerialUSB.print(F("GPS_FIRST,"));
-        SerialUSB.print(gps_first_len);
-        SerialUSB.print(',');
+        Log.print(F("GPS_FIRST,"));
+        Log.print(gps_first_len);
+        Log.print(',');
         for (uint16_t i = 0; i < gps_first_len && i < 64; i++)
         {
-            if (gps_first[i] < 0x10) SerialUSB.print('0');
-            SerialUSB.print(gps_first[i], HEX);
+            if (gps_first[i] < 0x10) Log.print('0');
+            Log.print(gps_first[i], HEX);
         }
-        SerialUSB.println();
+        Log.println();
     }
 
     /* Echo the most recent valid NMEA sentence (1 Hz). */
@@ -643,8 +697,8 @@ void loop(void)
     if (gps_nmea_valid && (millis() - last_nmea) >= 1000)
     {
         last_nmea = millis();
-        SerialUSB.print(F("GPS_RAW,"));
-        SerialUSB.println(gps_last_nmea);
+        Log.print(F("GPS_RAW,"));
+        Log.println(gps_last_nmea);
     }
 
     /* --- BMI323 presence detection (retry every 1 s until found) --------- */
@@ -655,14 +709,14 @@ void loop(void)
         if (bmi323_begin())
         {
             bmi_ready = true;
-            SerialUSB.println(F("BMI_STATUS,1"));
+            Log.println(F("BMI_STATUS,1"));
         }
         else
         {
-            SerialUSB.println(F("BMI_STATUS,0"));
+            Log.println(F("BMI_STATUS,0"));
             uint8_t raw = bmi_raw_chip_id();
-            SerialUSB.print(F("BMI_RAW,0x"));
-            SerialUSB.println(raw, HEX);
+            Log.print(F("BMI_RAW,0x"));
+            Log.println(raw, HEX);
         }
     }
 
@@ -694,24 +748,24 @@ void loop(void)
             g_ax = ax; g_ay = ay; g_az = az;
             g_gx = gx; g_gy = gy; g_gz = gz;
 
-            SerialUSB.print(F("BMI,"));
-            SerialUSB.print(ax, 4);
-            SerialUSB.print(',');
-            SerialUSB.print(ay, 4);
-            SerialUSB.print(',');
-            SerialUSB.print(az, 4);
-            SerialUSB.print(',');
-            SerialUSB.print(gx, 2);
-            SerialUSB.print(',');
-            SerialUSB.print(gy, 2);
-            SerialUSB.print(',');
-            SerialUSB.println(gz, 2);
+            Log.print(F("BMI,"));
+            Log.print(ax, 4);
+            Log.print(',');
+            Log.print(ay, 4);
+            Log.print(',');
+            Log.print(az, 4);
+            Log.print(',');
+            Log.print(gx, 2);
+            Log.print(',');
+            Log.print(gy, 2);
+            Log.print(',');
+            Log.println(gz, 2);
         }
         else
         {
             /* Read failed - drop out of ready so we re-initialize. */
             bmi_ready = false;
-            SerialUSB.println(F("BMI_STATUS,0"));
+            Log.println(F("BMI_STATUS,0"));
         }
     }
 
@@ -720,12 +774,12 @@ void loop(void)
     if (bmi_ready && (millis() - last_att_out) >= 50)
     {
         last_att_out = millis();
-        SerialUSB.print(F("ATT,"));
-        SerialUSB.print(att_roll_rad  * RAD_TO_DEG, 1);
-        SerialUSB.print(',');
-        SerialUSB.print(att_pitch_rad * RAD_TO_DEG, 1);
-        SerialUSB.print(',');
-        SerialUSB.println(att_yaw_rad * RAD_TO_DEG, 1);
+        Log.print(F("ATT,"));
+        Log.print(att_roll_rad  * RAD_TO_DEG, 1);
+        Log.print(',');
+        Log.print(att_pitch_rad * RAD_TO_DEG, 1);
+        Log.print(',');
+        Log.println(att_yaw_rad * RAD_TO_DEG, 1);
     }
 
     /* --- BMP581 forced mode, non-blocking: trigger at ~10 Hz, collect the
@@ -759,12 +813,12 @@ void loop(void)
             g_temp  = t;
             g_alt   = alt;
 
-            SerialUSB.print(F("BMP,"));
-            SerialUSB.print(p / 100.0f, 3);
-            SerialUSB.print(',');
-            SerialUSB.print(t, 2);
-            SerialUSB.print(',');
-            SerialUSB.println(alt, 2);
+            Log.print(F("BMP,"));
+            Log.print(p / 100.0f, 3);
+            Log.print(',');
+            Log.print(t, 2);
+            Log.print(',');
+            Log.println(alt, 2);
         }
     }
 
@@ -805,10 +859,12 @@ void loop(void)
     if ((millis() - last_sd_dbg) >= 5000)
     {
         last_sd_dbg = millis();
-        SerialUSB.print(F("SD_DBG,"));
-        SerialUSB.print(sd_ok ? 1 : 0);
-        SerialUSB.print(F(","));
-        SerialUSB.print(sd_log_name);
-        SerialUSB.println();
+        Log.print(F("SD_DBG,"));
+        Log.print(sd_ok ? 1 : 0);
+        Log.print(F(","));
+        Log.print(sd_log_name);
+        Log.print(F(","));
+        Log.print(Log.drops());          /* USB log lines dropped (host too slow) */
+        Log.println();
     }
 }

@@ -229,9 +229,14 @@ GPS,<lat>,<lon>,<alt_m>,<sats>,<fix>,<time>,<speed_kmh> (only with a fix)
 GPS_RAW,<last NMEA sentence>                            (1 Hz debug)
 GPS_DBG,<rx_bytes>,<baud>,<locked>                      (2 s debug)
 GPS_FIRST,<len>,<hex boot bytes>                        (3 s debug)
-BMI_STATUS,0|1   BMI_RAW,0xNN
-SD_STATUS,1|<file>   SD_DBG,<ok>,<file>
+BMI_STATUS,0|1   BMI_RAW,0xNN   BMP_STATUS,0|1
+SD_STATUS,1|<file>   SD_DBG,<ok>,<file>,<usb_log_drops>  (5 s debug)
 ```
+
+`usb_log_drops` counts whole telemetry lines dropped because the USB host was
+not draining the CDC queue fast enough. Non-zero is expected when the GUI is
+busy; it means the drop-on-full logger did its job instead of stalling the
+loop.
 
 GPS speed comes from `$GxRMC` knots × 1.852 → km/h. GPS time is **UTC** from
 `$GxGGA` / `$GxRMC`.
