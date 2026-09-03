@@ -160,6 +160,20 @@ static uint8_t bmi_raw_chip_id(void)
     return b[1];
 }
 
+/* Configured full-scale ranges. These two constants are the single source of
+   truth: the raw->physical scale factors below are derived from them, so the
+   streaming-loop conversion can never fall out of sync with the sensor config
+   (e.g. when the accel range moves to +/-8 g per the Phase 0 target).
+     accel FS = 2^(range+1) g            (2G=0 .. 16G=3)
+     gyro  FS = 2000 / 2^(2000dps-range) (125dps=0 .. 2000dps=4) */
+static constexpr uint8_t BMI_ACC_RANGE = BMI3_ACC_RANGE_4G;
+static constexpr uint8_t BMI_GYR_RANGE = BMI3_GYR_RANGE_2000DPS;
+
+static constexpr float BMI_ACC_LSB_G =
+    (float)(2u << BMI_ACC_RANGE) / 32768.0f;
+static constexpr float BMI_GYR_LSB_DPS =
+    (2000.0f / (float)(1u << (BMI3_GYR_RANGE_2000DPS - BMI_GYR_RANGE))) / 32768.0f;
+
 static bool bmi323_begin(void)
 {
     memset(&bmi_dev, 0, sizeof(bmi_dev));
@@ -177,13 +191,13 @@ static bool bmi323_begin(void)
     if (bmi323_get_sensor_config(cfg, 2, &bmi_dev) != BMI3_OK) return false;
 
     cfg[0].cfg.acc.odr      = BMI3_ACC_ODR_200HZ;
-    cfg[0].cfg.acc.range    = BMI3_ACC_RANGE_4G;
+    cfg[0].cfg.acc.range    = BMI_ACC_RANGE;
     cfg[0].cfg.acc.bwp      = BMI3_ACC_BW_ODR_QUARTER;
     cfg[0].cfg.acc.avg_num  = BMI3_ACC_AVG4;
     cfg[0].cfg.acc.acc_mode = BMI3_ACC_MODE_NORMAL;
 
     cfg[1].cfg.gyr.odr      = BMI3_GYR_ODR_200HZ;
-    cfg[1].cfg.gyr.range    = BMI3_GYR_RANGE_2000DPS;
+    cfg[1].cfg.gyr.range    = BMI_GYR_RANGE;
     cfg[1].cfg.gyr.bwp      = BMI3_GYR_BW_ODR_HALF;
     cfg[1].cfg.gyr.avg_num  = BMI3_GYR_AVG1;
     cfg[1].cfg.gyr.gyr_mode = BMI3_GYR_MODE_NORMAL;
@@ -644,12 +658,12 @@ void loop(void)
         data[1].type = BMI323_GYRO;
         if (bmi323_get_sensor_data(data, 2, &bmi_dev) == BMI3_OK)
         {
-            float ax = (float)data[0].sens_data.acc.x * 4.0f / 32768.0f;
-            float ay = (float)data[0].sens_data.acc.y * 4.0f / 32768.0f;
-            float az = (float)data[0].sens_data.acc.z * 4.0f / 32768.0f;
-            float gx = (float)data[1].sens_data.gyr.x * 2000.0f / 32768.0f;
-            float gy = (float)data[1].sens_data.gyr.y * 2000.0f / 32768.0f;
-            float gz = (float)data[1].sens_data.gyr.z * 2000.0f / 32768.0f;
+            float ax = (float)data[0].sens_data.acc.x * BMI_ACC_LSB_G;
+            float ay = (float)data[0].sens_data.acc.y * BMI_ACC_LSB_G;
+            float az = (float)data[0].sens_data.acc.z * BMI_ACC_LSB_G;
+            float gx = (float)data[1].sens_data.gyr.x * BMI_GYR_LSB_DPS;
+            float gy = (float)data[1].sens_data.gyr.y * BMI_GYR_LSB_DPS;
+            float gz = (float)data[1].sens_data.gyr.z * BMI_GYR_LSB_DPS;
 
             att_update(ax, ay, az, gx, gy, gz);
             g_ax = ax; g_ay = ay; g_az = az;
