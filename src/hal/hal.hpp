@@ -62,9 +62,22 @@ void init();
 uint32_t micros();   // wraps ~1.19 h
 uint32_t millis();   // wraps ~49.7 days
 
+// Free-running CPU cycle counter for per-task profiling. Wraps (32-bit: ~25 s
+// at 168 MHz). STM32: DWT->CYCCNT. native: nanoseconds, so cpu_hz() == 1e9.
+uint32_t cycles();
+uint32_t cpu_hz();   // cycles() ticks per second
+
 // Blocking. init() / bring-up only -- never from a scheduler task.
 void delay_ms(uint32_t ms);
 void delay_us(uint32_t us);
+
+// --------------------------------------------------------------------------
+// Independent watchdog. Once started it cannot be stopped. Kick it well
+// inside the timeout or the MCU resets (see hal::reset_cause()).
+// --------------------------------------------------------------------------
+
+void watchdog_start(uint32_t timeout_ms);
+void watchdog_kick();
 
 // --------------------------------------------------------------------------
 // GPIO -- exists only for the BMI323 bit-bang shim. Delete at reflow.

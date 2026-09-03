@@ -238,7 +238,7 @@ src/
     stm32/          real hardware (may call HAL_*/LL_* directly)    [exists]
     native/         desktop backend for tests and SITL             [exists]
   drivers/          bmi323, bmp581, ublox [exist]; crsf, esc_out — depend on hal only
-  core/             scheduler, params, logger, failsafe [none yet];
+  core/             scheduler [exists]; params, logger, failsafe [none yet];
                     usb_stream, sd_csv_log [exist, BENCH — see rule 1 exception]
   estimation/       ahrs [exists]; ins, baro_alt, nav_filter
   control/          pid, rate_ctrl, attitude_ctrl, tecs, nav_l1, mixer

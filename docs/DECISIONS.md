@@ -110,3 +110,19 @@ the BMI323 reflow, PWM on Phase 2, block device on the binary logger).
 `reset_cause()` and `jump_to_bootloader()` are implemented for real (F407
 `RCC->CSR` decode; system-memory `0x1FFF0000` entry) though nothing calls them
 yet -- they are the two "debugging without a debugger" early tasks.
+
+**2026-09-03 — Cooperative scheduler (`core/scheduler`).** Single-threaded, no
+RTOS, as specified in CLAUDE.md. Fixed 16-slot task table; `add(name, rate_hz,
+fn)` before `run()`. Each pass runs every due task once (bounded work),
+profiling it with `hal::cycles()` (DWT on STM32, nanoseconds on native) into
+per-task min/max/mean/last us + an overrun count (dispatched >half a period
+late, or ran longer than its period). `run_once()` is exposed so a test/SITL
+harness can step it; `run()` just loops it forever. Optional IWDG via
+`set_watchdog_ms()` (default off -- opt-in, since once started it can't be
+stopped and a spurious reset during bring-up is worse than no watchdog until
+MANUAL exists to fall back into). New hal surface it needs: `cycles()`,
+`cpu_hz()`, `watchdog_start()`, `watchdog_kick()`; `hal::init()` now enables
+the DWT counter. Portable -- built and asserted by `[env:native]`
+(`main_native.cpp`: 100 Hz task runs 50x / 20 Hz runs 10x over 500 ms).
+NOT yet wired into `main_stm32.cpp` -- the streamer loop adopts it in the CRSF
+session, when CRSF parse becomes the first real scheduled task.

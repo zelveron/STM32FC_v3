@@ -25,14 +25,33 @@ namespace hal {
 void init()
 {
     // The Arduino core has already configured the clock tree, SysTick and the
-    // GPIO clocks by the time this runs. Nothing else is needed yet.
+    // GPIO clocks. Enable the DWT cycle counter for hal::cycles().
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CYCCNT = 0;
+    DWT->CTRL   |= DWT_CTRL_CYCCNTENA_Msk;
 }
 
 uint32_t micros() { return ::micros(); }
 uint32_t millis() { return ::millis(); }
+uint32_t cycles() { return DWT->CYCCNT; }
+uint32_t cpu_hz() { return SystemCoreClock; }   // 168 MHz on this board
 
 void delay_ms(uint32_t ms) { ::delay(ms); }
 void delay_us(uint32_t us) { ::delayMicroseconds(us); }
+
+// --- IWDG -----------------------------------------------------------------
+// LSI ~32 kHz, prescaler /32 -> ~1 kHz -> 1 reload tick ~= 1 ms.
+// Max reload 0xFFF -> ~4.095 s.
+void watchdog_start(uint32_t timeout_ms)
+{
+    if (timeout_ms > 4095) timeout_ms = 4095;
+    IWDG->KR  = 0x5555;          // enable register write access
+    IWDG->PR  = 3;               // /32
+    IWDG->RLR = timeout_ms;      // ~1 ms per tick
+    IWDG->KR  = 0xAAAA;          // reload
+    IWDG->KR  = 0xCCCC;          // start
+}
+void watchdog_kick() { IWDG->KR = 0xAAAA; }
 
 // ---------------------------------------------------------------------------
 // GPIO (BMI323 bit-bang shim only)

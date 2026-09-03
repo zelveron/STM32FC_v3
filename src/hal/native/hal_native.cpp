@@ -32,9 +32,18 @@ uint32_t millis()
     using namespace std::chrono;
     return (uint32_t)duration_cast<milliseconds>(steady_clock::now() - s_t0).count();
 }
+uint32_t cycles()
+{
+    using namespace std::chrono;
+    return (uint32_t)duration_cast<nanoseconds>(steady_clock::now() - s_t0).count();
+}
+uint32_t cpu_hz() { return 1000000000u; }   // cycles() is nanoseconds on native
 
 void delay_ms(uint32_t ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); }
 void delay_us(uint32_t us) { std::this_thread::sleep_for(std::chrono::microseconds(us)); }
+
+void watchdog_start(uint32_t) {}
+void watchdog_kick() {}
 
 void gpio_config(PinId, PinMode) {}
 void gpio_write (PinId, bool)    {}
