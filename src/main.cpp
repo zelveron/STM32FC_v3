@@ -69,6 +69,12 @@ static void bmp5_delay_us(uint32_t period, void *intf_ptr)
 
 static struct bmp5_dev bmp_dev;
 static struct bmp5_osr_odr_press_config bmp_cfg;
+static bool bmp_ok = false;
+
+/* Worst-case BMP581 conversion time for 1x temp + 16x pressure oversampling,
+   with margin. Used to space the forced-mode trigger from the result read so
+   neither blocks the loop. */
+static const uint32_t BMP_CONV_US = 40000;
 
 static bool bmp5_begin(void)
 {
@@ -83,7 +89,7 @@ static bool bmp5_begin(void)
     bmp_cfg.osr_t    = BMP5_OVERSAMPLING_1X;
     bmp_cfg.osr_p    = BMP5_OVERSAMPLING_16X;
     bmp_cfg.press_en = BMP5_ENABLE;
-    bmp_cfg.odr      = BMP5_ODR_100_2_HZ;
+    bmp_cfg.odr      = BMP5_ODR_100_2_HZ;   /* unused in forced mode */
 
     if (bmp5_set_osr_odr_press_config(&bmp_cfg, &bmp_dev) != BMP5_OK) return false;
     return true;
@@ -516,6 +522,9 @@ void setup(void)
     gps_drain();
     SerialUSB.println(F("boot: BMP581 + BMI323 + uBlox + SD streamer"));
 
+    /* BMP581 is initialised once here, not retried from loop(). */
+    bmp_ok = bmp5_begin();
+    SerialUSB.println(bmp_ok ? F("BMP_STATUS,1") : F("BMP_STATUS,0"));
     gps_drain();
 
     /* --- SD card (SDIO 4-bit) + log file -------------------------------- */
@@ -703,41 +712,43 @@ void loop(void)
         SerialUSB.println(att_yaw, 1);
     }
 
-    /* --- BMP581 streaming at ~10 Hz -------------------------------------- */
-    static uint32_t last_bmp = 0;
-    if ((millis() - last_bmp) >= 100)
+    /* --- BMP581 forced mode, non-blocking: trigger at ~10 Hz, collect the
+       result on a later pass once the conversion has had time to finish.
+       No delay() -- the old code blocked the whole loop for 30 ms here. ----- */
+    static uint32_t last_bmp   = 0;
+    static uint32_t bmp_trig_us = 0;
+    static bool     bmp_pending = false;
+
+    if (bmp_ok && !bmp_pending && (millis() - last_bmp) >= 100)
     {
         last_bmp = millis();
-
-        static bool bmp_ok = false;
-        if (!bmp_ok)
+        if (bmp5_set_power_mode(BMP5_POWERMODE_FORCED, &bmp_dev) == BMP5_OK)
         {
-            bmp_ok = bmp5_begin();
+            bmp_trig_us = micros();
+            bmp_pending = true;
         }
+    }
+    else if (bmp_pending && (micros() - bmp_trig_us) >= BMP_CONV_US)
+    {
+        bmp_pending = false;
 
-        if (bmp_ok)
+        struct bmp5_sensor_data data;
+        if (bmp5_get_sensor_data(&data, &bmp_cfg, &bmp_dev) == BMP5_OK)
         {
-            bmp5_set_power_mode(BMP5_POWERMODE_FORCED, &bmp_dev);
-            delay(30);
+            float p = data.pressure;
+            float t = data.temperature;
+            float alt = 44330.0f * (1.0f - powf(p / 101325.0f, 0.1902632f));
 
-            struct bmp5_sensor_data data;
-            if (bmp5_get_sensor_data(&data, &bmp_cfg, &bmp_dev) == BMP5_OK)
-            {
-                float p = data.pressure;
-                float t = data.temperature;
-                float alt = 44330.0f * (1.0f - powf(p / 101325.0f, 0.1902632f));
+            g_press = p / 100.0f;
+            g_temp  = t;
+            g_alt   = alt;
 
-                g_press = p / 100.0f;
-                g_temp  = t;
-                g_alt   = alt;
-
-                SerialUSB.print(F("BMP,"));
-                SerialUSB.print(p / 100.0f, 3);
-                SerialUSB.print(',');
-                SerialUSB.print(t, 2);
-                SerialUSB.print(',');
-                SerialUSB.println(alt, 2);
-            }
+            SerialUSB.print(F("BMP,"));
+            SerialUSB.print(p / 100.0f, 3);
+            SerialUSB.print(',');
+            SerialUSB.print(t, 2);
+            SerialUSB.print(',');
+            SerialUSB.println(alt, 2);
         }
     }
 
