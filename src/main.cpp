@@ -217,51 +217,61 @@ static bool bmi323_begin(void)
 /* Attitude estimate (complementary filter — ArduPilot DCM/EKF foundation)   */
 /* ------------------------------------------------------------------------- */
 
-static float att_roll = 0.0f, att_pitch = 0.0f, att_yaw = 0.0f;
-static uint32_t att_last_us = 0;
-static bool att_init = false;
+/* Attitude state, radians, body FRD (see CLAUDE.md conventions).
+   NOT flight-grade: fixed blend gain, no accel gating, no gyro bias
+   calibration, unreferenced drifting yaw. Phase 1 replaces this. */
+static float att_roll_rad = 0.0f, att_pitch_rad = 0.0f, att_yaw_rad = 0.0f;
+static bool  att_init = false;
 
-static void att_update(float ax, float ay, float az, float gx, float gy, float gz)
+static inline float wrap_pi(float a)
 {
-    uint32_t now = micros();
-    float dt = (att_last_us == 0) ? 0.01f : (float)(now - att_last_us) / 1000000.0f;
-    if (dt <= 0.0f || dt > 0.1f) dt = 0.01f;
-    att_last_us = now;
+    while (a >  (float)M_PI) a -= 2.0f * (float)M_PI;
+    while (a < -(float)M_PI) a += 2.0f * (float)M_PI;
+    return a;
+}
+
+/* Complementary filter. Inputs: accel in g, gyro in deg/s, timestep in seconds
+   (the caller owns the clock). State is radians. */
+static void att_update(float ax_g, float ay_g, float az_g,
+                       float gx_dps, float gy_dps, float gz_dps,
+                       float dt_s)
+{
+    if (dt_s <= 0.0f || dt_s > 0.1f) dt_s = 0.01f;
 
     /* Roll / pitch from the gravity vector (valid in non-accelerating flight). */
-    float acc_roll  = atan2f(ay, az) * RAD_TO_DEG;
-    float acc_pitch = atan2f(-ax, sqrtf(ay * ay + az * az)) * RAD_TO_DEG;
+    float acc_roll  = atan2f(ay_g, az_g);
+    float acc_pitch = atan2f(-ax_g, sqrtf(ay_g * ay_g + az_g * az_g));
 
     if (!att_init)
     {
-        att_roll  = acc_roll;
-        att_pitch = acc_pitch;
-        att_yaw   = 0.0f;
-        att_init  = true;
+        att_roll_rad  = acc_roll;
+        att_pitch_rad = acc_pitch;
+        att_yaw_rad   = 0.0f;
+        att_init      = true;
         return;
     }
 
     /* Gyro body rates -> Euler angle rates (rad/s). */
-    float p = gx * DEG_TO_RAD;
-    float q = gy * DEG_TO_RAD;
-    float r = gz * DEG_TO_RAD;
+    float p = gx_dps * DEG_TO_RAD;
+    float q = gy_dps * DEG_TO_RAD;
+    float r = gz_dps * DEG_TO_RAD;
 
-    float sp = sinf(att_roll * DEG_TO_RAD);
-    float cp = cosf(att_roll * DEG_TO_RAD);
-    float tt = tanf(att_pitch * DEG_TO_RAD);
-    float ct = cosf(att_pitch * DEG_TO_RAD);
+    float sp = sinf(att_roll_rad);
+    float cp = cosf(att_roll_rad);
+    float tt = tanf(att_pitch_rad);
+    float ct = cosf(att_pitch_rad);
     if (fabsf(ct) < 0.1f) ct = (ct < 0.0f) ? -0.1f : 0.1f;
 
     float phi_dot   = p + sp * tt * q + cp * tt * r;
     float theta_dot = cp * q - sp * r;
     float psi_dot   = (sp / ct) * q + (cp / ct) * r;
 
-    /* Complementary filter: blend gyro integration (fast, drifts) with the
-       accel reference (noisy, no drift). alpha = 0.98 -> ~0.5 s time constant. */
+    /* Blend gyro integration (fast, drifts) with the accel reference (noisy,
+       no drift). alpha = 0.98 -> ~0.5 s time constant at 100 Hz. */
     const float alpha = 0.98f;
-    att_roll  = alpha * (att_roll  + phi_dot   * dt * RAD_TO_DEG) + (1.0f - alpha) * acc_roll;
-    att_pitch = alpha * (att_pitch + theta_dot * dt * RAD_TO_DEG) + (1.0f - alpha) * acc_pitch;
-    att_yaw  += psi_dot * dt * RAD_TO_DEG;
+    att_roll_rad  = alpha * (att_roll_rad  + phi_dot   * dt_s) + (1.0f - alpha) * acc_roll;
+    att_pitch_rad = alpha * (att_pitch_rad + theta_dot * dt_s) + (1.0f - alpha) * acc_pitch;
+    att_yaw_rad   = wrap_pi(att_yaw_rad + psi_dot * dt_s);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -658,6 +668,7 @@ void loop(void)
 
     /* --- BMI323 streaming at ~100 Hz ------------------------------------- */
     static uint32_t last_bmi = 0;
+    static uint32_t att_last_us = 0;
     if (bmi_ready && (millis() - last_bmi) >= 10)
     {
         last_bmi = millis();
@@ -674,7 +685,12 @@ void loop(void)
             float gy = (float)data[1].sens_data.gyr.y * BMI_GYR_LSB_DPS;
             float gz = (float)data[1].sens_data.gyr.z * BMI_GYR_LSB_DPS;
 
-            att_update(ax, ay, az, gx, gy, gz);
+            uint32_t now_us = micros();
+            float dt_s = (att_last_us == 0) ? 0.01f
+                                            : (float)(now_us - att_last_us) * 1e-6f;
+            att_last_us = now_us;
+            att_update(ax, ay, az, gx, gy, gz, dt_s);
+
             g_ax = ax; g_ay = ay; g_az = az;
             g_gx = gx; g_gy = gy; g_gz = gz;
 
@@ -705,11 +721,11 @@ void loop(void)
     {
         last_att_out = millis();
         SerialUSB.print(F("ATT,"));
-        SerialUSB.print(att_roll, 1);
+        SerialUSB.print(att_roll_rad  * RAD_TO_DEG, 1);
         SerialUSB.print(',');
-        SerialUSB.print(att_pitch, 1);
+        SerialUSB.print(att_pitch_rad * RAD_TO_DEG, 1);
         SerialUSB.print(',');
-        SerialUSB.println(att_yaw, 1);
+        SerialUSB.println(att_yaw_rad * RAD_TO_DEG, 1);
     }
 
     /* --- BMP581 forced mode, non-blocking: trigger at ~10 Hz, collect the
@@ -766,9 +782,9 @@ void loop(void)
         sd_file.print(g_gx, 2); sd_file.print(',');
         sd_file.print(g_gy, 2); sd_file.print(',');
         sd_file.print(g_gz, 2); sd_file.print(',');
-        sd_file.print(att_roll, 1); sd_file.print(',');
-        sd_file.print(att_pitch, 1); sd_file.print(',');
-        sd_file.print(att_yaw, 1); sd_file.print(',');
+        sd_file.print(att_roll_rad  * RAD_TO_DEG, 1); sd_file.print(',');
+        sd_file.print(att_pitch_rad * RAD_TO_DEG, 1); sd_file.print(',');
+        sd_file.print(att_yaw_rad   * RAD_TO_DEG, 1); sd_file.print(',');
         sd_file.print(g_press, 3); sd_file.print(',');
         sd_file.print(g_temp, 2); sd_file.print(',');
         sd_file.print(g_alt, 2); sd_file.print(',');
