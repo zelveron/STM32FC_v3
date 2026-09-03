@@ -90,190 +90,6 @@ static bool bmp5_begin(void)
     return true;
 }
 
-/* ------------------------------------------------------------------------- */
-/* ALS31300 3-axis Hall-effect sensor (software I2C on PB8=SCL, PB9=SDA)      */
-/* ------------------------------------------------------------------------- */
-
-#define ALS_SCL   PB8
-#define ALS_SDA   PB9
-#define ALS_ADDR  0x60   /* ALS31300 default (ADR0=ADR1=GND) = 96 decimal, datasheet Table 19 */
-
-/* PB8/PB9 are I2C1's *alternate* pins and I2C1 is already used by the BMP581
-   on PB6/PB7, so the ALS is driven with a small software (bit-bang) I2C master. */
-
-static void als_sda_out(bool high)
-{
-    pinMode(ALS_SDA, OUTPUT);
-    digitalWrite(ALS_SDA, high ? HIGH : LOW);
-}
-
-static void als_sda_in(void)
-{
-    pinMode(ALS_SDA, INPUT_PULLUP);
-}
-
-static void als_i2c_start(void)
-{
-    als_sda_out(true);
-    digitalWrite(ALS_SCL, HIGH);
-    delayMicroseconds(5);
-    als_sda_out(false);            /* SDA falls while SCL high = START */
-    delayMicroseconds(5);
-    digitalWrite(ALS_SCL, LOW);
-}
-
-static void als_i2c_stop(void)
-{
-    als_sda_out(false);
-    digitalWrite(ALS_SCL, HIGH);
-    delayMicroseconds(5);
-    als_sda_out(true);             /* SDA rises while SCL high = STOP */
-    delayMicroseconds(5);
-}
-
-/* Write 8 bits MSB-first, then clock the ACK bit. Returns true on ACK. */
-static bool als_i2c_write(uint8_t b)
-{
-    for (int i = 7; i >= 0; i--)
-    {
-        als_sda_out((b >> i) & 1);
-        digitalWrite(ALS_SCL, HIGH);
-        delayMicroseconds(5);
-        digitalWrite(ALS_SCL, LOW);
-        delayMicroseconds(5);
-    }
-    als_sda_in();                  /* release SDA so the slave can ACK */
-    digitalWrite(ALS_SCL, HIGH);
-    delayMicroseconds(5);
-    bool ack = (digitalRead(ALS_SDA) == LOW);
-    digitalWrite(ALS_SCL, LOW);
-    delayMicroseconds(5);
-    als_sda_out(true);
-    return ack;
-}
-
-/* Read 8 bits MSB-first; ack=true sends ACK (all but the last byte). */
-static uint8_t als_i2c_read(bool ack)
-{
-    uint8_t b = 0;
-    als_sda_in();
-    for (int i = 7; i >= 0; i--)
-    {
-        digitalWrite(ALS_SCL, HIGH);
-        delayMicroseconds(5);
-        if (digitalRead(ALS_SDA)) b |= (1 << i);
-        digitalWrite(ALS_SCL, LOW);
-        delayMicroseconds(5);
-    }
-    als_sda_out(!ack);             /* ACK = SDA low, NACK = SDA high */
-    digitalWrite(ALS_SCL, HIGH);
-    delayMicroseconds(5);
-    digitalWrite(ALS_SCL, LOW);
-    delayMicroseconds(5);
-    als_sda_out(true);
-    return b;
-}
-
-static int  als_read_fail_stage = 0;   /* 0=ok, 1=address/reg NACK */
-
-static bool als_read(uint8_t reg, uint8_t *buf, uint8_t len)
-{
-    als_i2c_start();
-    if (!als_i2c_write((ALS_ADDR << 1) | 0)) { als_i2c_stop(); als_read_fail_stage = 1; return false; }
-    if (!als_i2c_write(reg))                 { als_i2c_stop(); als_read_fail_stage = 1; return false; }
-    als_i2c_start();                         /* repeated START */
-    if (!als_i2c_write((ALS_ADDR << 1) | 1)) { als_i2c_stop(); als_read_fail_stage = 1; return false; }
-    for (uint8_t i = 0; i < len; i++) buf[i] = als_i2c_read(i < len - 1);
-    als_i2c_stop();
-    als_read_fail_stage = 0;
-    return true;
-}
-
-static void als_write(uint8_t reg, const uint8_t *buf, uint8_t len)
-{
-    als_i2c_start();
-    if (!als_i2c_write((ALS_ADDR << 1) | 0)) { als_i2c_stop(); return; }
-    if (!als_i2c_write(reg))                 { als_i2c_stop(); return; }
-    for (uint8_t i = 0; i < len; i++)
-        if (!als_i2c_write(buf[i]))          { als_i2c_stop(); return; }
-    als_i2c_stop();
-}
-
-/* One-time diagnostic: ACK check + 8-byte data read over software I2C. */
-static void als_debug_probe(void)
-{
-    uint8_t b[8];
-
-    als_i2c_start();
-    bool ack = als_i2c_write((ALS_ADDR << 1) | 0);
-    als_i2c_stop();
-
-    SerialUSB.print(F("ALS_PRB,"));
-    SerialUSB.print(ALS_ADDR, HEX);
-    SerialUSB.print(F(",ack="));
-    SerialUSB.print(ack ? 1 : 0);
-    SerialUSB.print(F(",n="));
-
-    if (ack && als_read(0x28, b, 8))
-    {
-        SerialUSB.print(8);
-        SerialUSB.print(',');
-        for (int i = 0; i < 8; i++)
-        {
-            if (b[i] < 0x10) SerialUSB.print('0');
-            SerialUSB.print(b[i], HEX);
-        }
-    }
-    else
-    {
-        SerialUSB.print(0);
-    }
-    SerialUSB.println();
-}
-
-static bool als_present = false;
-static float mag_heading = 0.0f;
-
-static void als_begin(void)
-{
-    pinMode(ALS_SCL, OUTPUT);
-    digitalWrite(ALS_SCL, LOW);
-    als_sda_out(true);
-
-    /* ACK check at 0x60 over software I2C. */
-    als_i2c_start();
-    als_present = als_i2c_write((ALS_ADDR << 1) | 0);
-    als_i2c_stop();
-    if (!als_present) return;
-
-    /* Wake from sleep: register 0x27 bits[1:0] = 0 -> Active Mode.
-       Per datasheet, "sleep" is the one register writable WITHOUT entering
-       Customer Access mode, so no CAC unlock is needed. */
-    uint8_t v[4] = { 0x00, 0x00, 0x00, 0x00 };
-    als_write(0x27, v, 4);
-
-    /* Exit-sleep time == power-on delay time. */
-    delayMicroseconds(600);
-}
-
-static bool als_get(int16_t *x, int16_t *y, int16_t *z, int16_t *t, uint8_t *raw)
-{
-    uint8_t b[8];
-    if (!als_read(0x28, b, 8)) return false;
-    if (raw) for (int i = 0; i < 8; i++) raw[i] = b[i];
-
-    int16_t rx = (int16_t)(((uint16_t)b[0] << 4) | (b[5] & 0x0F));
-    if (rx & 0x0800) rx |= (int16_t)0xF000;
-    int16_t ry = (int16_t)(((uint16_t)b[1] << 4) | ((b[6] >> 4) & 0x0F));
-    if (ry & 0x0800) ry |= (int16_t)0xF000;
-    int16_t rz = (int16_t)(((uint16_t)b[2] << 4) | (b[6] & 0x0F));
-    if (rz & 0x0800) rz |= (int16_t)0xF000;
-    int16_t rt = (int16_t)(((uint16_t)(b[3] & 0x3F) << 6) | (b[7] & 0x3F));
-
-    *x = rx; *y = ry; *z = rz; *t = rt;
-    return true;
-}
-
 /* Scan the I2C bus and report ACKing 7-bit addresses (0x08..0x7F). */
 static void i2c_scan(void)
 {
@@ -739,8 +555,6 @@ void setup(void)
     Wire.setSDA(PB7);
     Wire.begin();
 
-    als_begin();
-
     SerialUSB.begin();
     gps_uart_begin(GPS_BAUD);
 
@@ -750,11 +564,8 @@ void setup(void)
     gps_drain();
     SerialUSB.println(F("boot: BMP581 + BMI323 + uBlox + SD streamer"));
 
-    /* One-time I2C bus scan + ALS presence report. */
+    /* One-time I2C bus scan. */
     i2c_scan();
-    SerialUSB.print(F("ALS_STATUS,"));
-    SerialUSB.println(als_present ? 1 : 0);
-    als_debug_probe();
     gps_drain();
 
     /* --- SD card (SDIO 4-bit) + log file -------------------------------- */
@@ -768,7 +579,7 @@ void setup(void)
         sd_file = SD.open(sd_log_name, FILE_WRITE);
         if (sd_file)
         {
-            sd_file.println(F("t_ms,ax,ay,az,gx,gy,gz,roll,pitch,yaw,press_hPa,temp_c,alt_m,gps_time,gps_sats,gps_speed_kmh,als_heading"));
+            sd_file.println(F("t_ms,ax,ay,az,gx,gy,gz,roll,pitch,yaw,press_hPa,temp_c,alt_m,gps_time,gps_sats,gps_speed_kmh"));
             sd_file.flush();
             SerialUSB.print(F("SD_STATUS,1,"));
             SerialUSB.println(sd_log_name);
@@ -1005,62 +816,6 @@ void loop(void)
         }
     }
 
-    /* --- ALS31300 reading at ~10 Hz (only if present) -------------------- */
-    static uint32_t last_als = 0;
-    if (als_present && (millis() - last_als) >= 100)
-    {
-        last_als = millis();
-        int16_t ax_, ay_, az_, at_;
-        uint8_t raw[8];
-        if (als_get(&ax_, &ay_, &az_, &at_, raw))
-        {
-            float temp_c = 302.0f * ((float)at_ - 1708.0f) / 4096.0f;
-
-            /* Tilt-compensated magnetic heading (0-360 deg, magnetic north).
-               NXP AN4248 formula; raw counts are scale-invariant so no
-               sensitivity conversion is needed. Axis alignment + hard-iron
-               calibration not applied (see README). */
-            float roll  = att_roll  * DEG_TO_RAD;
-            float pitch = att_pitch * DEG_TO_RAD;
-            float sr = sinf(roll),  cr = cosf(roll);
-            float sp = sinf(pitch), cp = cosf(pitch);
-            float Xh = ax_ * cp + az_ * sp;
-            float Yh = ax_ * sr * sp + ay_ * cr - az_ * sr * cp;
-            mag_heading = atan2f(-Yh, Xh) * RAD_TO_DEG;
-            if (mag_heading < 0.0f) mag_heading += 360.0f;
-
-            SerialUSB.print(F("ALS,"));
-            SerialUSB.print(ax_);
-            SerialUSB.print(',');
-            SerialUSB.print(ay_);
-            SerialUSB.print(',');
-            SerialUSB.print(az_);
-            SerialUSB.print(',');
-            SerialUSB.print(temp_c, 1);
-            SerialUSB.print(',');
-            SerialUSB.println(mag_heading, 1);
-        }
-    }
-
-    /* --- ALS31300 raw bytes at ~2 Hz (only if present) -------------------- */
-    static uint32_t last_als_raw = 0;
-    if (als_present && (millis() - last_als_raw) >= 500)
-    {
-        last_als_raw = millis();
-        uint8_t raw[8];
-        if (als_read(0x28, raw, 8))
-        {
-            SerialUSB.print(F("ALS_RAW,"));
-            for (int i = 0; i < 8; i++)
-            {
-                if (raw[i] < 0x10) SerialUSB.print('0');
-                SerialUSB.print(raw[i], HEX);
-                if (i < 7) SerialUSB.print(',');
-            }
-            SerialUSB.println();
-        }
-    }
-
     /* --- SD data log at ~50 Hz ------------------------------------------- */
     static uint32_t last_sd_log = 0;
     if (sd_ok && bmi_ready && (millis() - last_sd_log) >= 20)
@@ -1083,8 +838,7 @@ void loop(void)
         sd_file.print(g_alt, 2); sd_file.print(',');
         sd_file.print(gps_time_str); sd_file.print(',');
         sd_file.print(gps_sats); sd_file.print(',');
-        sd_file.print(gps_speed_kmh, 1); sd_file.print(',');
-        sd_file.println(mag_heading, 1);
+        sd_file.println(gps_speed_kmh, 1);
 
         static uint32_t last_sd_sync = 0;
         if ((millis() - last_sd_sync) >= 1000)
