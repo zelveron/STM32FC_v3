@@ -57,4 +57,34 @@ uint32_t bytes_rx();
 // --- diagnostic: copy of the most recent raw RX bytes (up to 32) ---
 size_t   raw_sample(uint8_t* out, size_t max);
 
+// --- telemetry TX (FC -> handset, over the same UART the RX reads) ----------
+//
+// Each builder assembles a CRSF frame [0xC8][len][type][payload][crc8] with a
+// big-endian payload (CRSF convention) and hands it to hal::uart_write. The
+// frame is written whole or not at all (checked against the TX ring space), so
+// a full ring drops the frame instead of corrupting the stream. Non-blocking.
+// Returns true if the frame was queued.
+//
+// Call these from a low-rate task (~10 Hz); the ELRS link paces the actual
+// over-air telemetry, the FC just keeps fresh frames available.
+
+struct GpsTelem {
+    int32_t lat_1e7      = 0;
+    int32_t lon_1e7      = 0;
+    float   ground_mps   = 0.0f;
+    float   heading_deg  = 0.0f;   // course over ground; 0 if unknown
+    float   altitude_m   = 0.0f;   // MSL (EdgeTX labels it "GAlt")
+    uint8_t sats         = 0;
+};
+
+bool send_gps        (const GpsTelem& g);              // 0x02
+bool send_vario      (float climb_mps);                // 0x07  (+ = up)
+bool send_battery    (float volts, float amps,
+                      uint32_t mah_used, uint8_t pct); // 0x08
+bool send_attitude   (float pitch_rad, float roll_rad,
+                      float yaw_rad);                  // 0x1E
+bool send_flight_mode(const char* mode);               // 0x21  (ASCII, <=15 ch)
+
+uint32_t telem_frames_tx();   // count of frames queued, for the debug line
+
 } // namespace crsf

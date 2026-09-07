@@ -105,7 +105,8 @@ modes::Id           s_mode_req  = modes::Id::manual;   // requested via ch7
 core::LogRing       s_log_ring;                        // binary log producers -> SD
 estimation::ImuPrep s_imu_prep;                        // gyro-bias cal + LPF
 estimation::BaroAlt s_baro_alt;                        // ground-referenced altitude
-float               g_alt_agl_m = 0.0f;
+float               g_alt_agl_m  = 0.0f;
+float               g_climb_mps  = 0.0f;               // filtered dAGL/dt, for the CRSF vario
 
 // ---------------------------------------------------------------------------
 // Scheduler tasks (one per old loop() block; timing gates are now the
@@ -189,6 +190,53 @@ void set_mode(modes::Id id)
     s_mode_active = next;
     s_mode_cur    = id;
     L().print(F("MODE_CHANGE,")); L().println(next->name());
+}
+
+// Flight-mode string for CRSF telemetry (EdgeTX "FM" sensor). A leading '!'
+// makes EdgeTX flag it; a trailing '*' is the common "disarmed" marker.
+const char* fm_string()
+{
+    if (s_failsafe.active())  return "!FS";
+    if (s_assist_lockout && s_mode_cur != modes::Id::assist) return "!LOCK";
+    if (!s_arming.armed()) {
+        switch (s_mode_cur) {
+            case modes::Id::assist: return "ASSIST*";
+            case modes::Id::auto_:  return "AUTO*";
+            default:                return "MANUAL*";
+        }
+    }
+    switch (s_mode_cur) {
+        case modes::Id::assist: return "ASSIST";
+        case modes::Id::auto_:  return "AUTO";
+        default:                return "MANUAL";
+    }
+}
+
+void task_crsf_tx()   // 10 Hz -- FC -> handset telemetry over the CRSF uplink
+{
+    if (!crsf::receiving()) return;   // no link -> nothing to send
+
+    // attitude + vario every tick; GPS and flight-mode interleaved (~2.5 Hz each)
+    crsf::send_attitude(ahrs::pitch_rad(), ahrs::roll_rad(), ahrs::yaw_rad());
+    crsf::send_vario(g_climb_mps);
+
+    static uint8_t phase = 0;
+    switch (phase++ & 0x03) {
+        case 0: {
+            crsf::GpsTelem g;
+            g.lat_1e7     = (int32_t)(ublox::lat_deg() * 1e7);
+            g.lon_1e7     = (int32_t)(ublox::lon_deg() * 1e7);
+            g.ground_mps  = ublox::speed_kmh() * (1.0f / 3.6f);
+            g.heading_deg = 0.0f;                       // no course-over-ground yet
+            g.altitude_m  = ublox::alt_m();
+            g.sats        = (uint8_t)ublox::sats();
+            crsf::send_gps(g);
+            break;
+        }
+        case 2:
+            crsf::send_flight_mode(fm_string());
+            break;
+    }
 }
 
 void task_control()   // 400 Hz -- CRSF -> arming/failsafe -> mode -> mixer -> PWM
@@ -357,6 +405,20 @@ void task_bmp()   // 50 Hz -- driver self-gates the ~10 Hz trigger/collect
     if (!s_arming.armed()) s_baro_alt.set_ground(p_pa);
     g_alt_agl_m = s_baro_alt.alt_m(p_pa);
 
+    // climb rate: filtered derivative of AGL (feeds the CRSF vario)
+    static uint32_t s_climb_ms  = 0;
+    static float    s_climb_agl = 0.0f;
+    const uint32_t now_ms = millis();
+    if (s_climb_ms != 0) {
+        const float dt = (float)(now_ms - s_climb_ms) * 1e-3f;
+        if (dt > 1e-3f) {
+            const float raw = (g_alt_agl_m - s_climb_agl) / dt;
+            g_climb_mps += 0.08f * (raw - g_climb_mps);   // ~0.7 Hz LPF at 50 Hz
+        }
+    }
+    s_climb_ms  = now_ms;
+    s_climb_agl = g_alt_agl_m;
+
     L().print(F("BMP,"));
     L().print(p_pa / 100.0f, 3); L().print(',');
     L().print(bs.temp_c, 2);     L().print(',');
@@ -463,6 +525,7 @@ void task_debug()   // 2 Hz -- the low-rate GPS/SD debug lines keep their gates
         L().print(by, 2); L().print('/');  L().print(bz, 2);
         L().print(F(",acc_trust="));       L().print(ahrs::acc_trust(), 2);
         L().print(F(",agl_m="));           L().print(g_alt_agl_m, 2);
+        L().print(F(",climb_mps="));       L().print(g_climb_mps, 2);
         L().print(F(",baro_ref="));        L().print(s_baro_alt.referenced() ? 1 : 0);
         L().println();
     }
@@ -474,6 +537,7 @@ void task_debug()   // 2 Hz -- the low-rate GPS/SD debug lines keep their gates
         L().print(F(",frames_ok="));          L().print(crsf::frames_ok());
         L().print(F(",crc_err="));            L().print(crsf::crc_errors());
         L().print(F(",resync="));             L().print(crsf::resyncs());
+        L().print(F(",telem_tx="));           L().print(crsf::telem_frames_tx());
         L().println();
     }
 
@@ -571,6 +635,7 @@ void setup()
     // (bmi writes g_*/ahrs, then att_out and sd_log read them).
     sched::add("gps",       50, task_gps);
     sched::add("crsf",     100, task_crsf);
+    sched::add("crsf_tx",   10, task_crsf_tx);   // FC -> handset telemetry
     sched::add("bmi_retry",  1, task_bmi_retry);
     sched::add("bmi",      100, task_bmi);
     sched::add("control",  400, task_control);

@@ -191,6 +191,13 @@ size_t uart_write(Uart u, const uint8_t* buf, size_t n)
     size_t k = ((size_t)space < n) ? (size_t)space : n;
     return p->write(buf, k);
 }
+size_t uart_write_space(Uart u)
+{
+    HardwareSerial* p = port_for(u);
+    if (!p) return 0;
+    const int space = p->availableForWrite();
+    return space > 0 ? (size_t)space : 0;
+}
 
 bool uart_tx_idle(Uart u)
 {

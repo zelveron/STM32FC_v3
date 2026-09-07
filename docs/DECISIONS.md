@@ -350,3 +350,24 @@ integrators: frozen/active". 2 new native assertions; SITL `--assist-check`
 unchanged (sim always flying). NOTE: the residual ~1 deg roll with I frozen is
 an accel-cal / mounting error, not a control bug -- 6-point accel calibration
 is still deferred (needs `core/params`).
+
+**2026-09-07 — CRSF telemetry TX (FC -> handset).** The flying aircraft has no
+USB; the pilot's picture of the FC comes back over the CRSF uplink to the
+TX16S. `drivers/crsf` gained frame builders -- `send_attitude` (0x1E,
+pitch/roll/yaw in rad*1e4), `send_gps` (0x02, lat/lon 1e7, ground speed,
+heading, alt, sats), `send_vario` (0x07, cm/s), `send_battery` (0x08; built but
+NOT sent -- no voltage/current sensor on the board yet, see below), and
+`send_flight_mode` (0x21, ASCII: "MANUAL"/"ASSIST"/"AUTO", trailing `*` when
+disarmed, `!FS` on failsafe, `!LOCK` when ASSIST is latched-out by an IMU
+fault). All payloads big-endian per CRSF; CRC-8/DVB-S2 over type+payload, same
+as the RX parser. Frames are written whole-or-not-at-all against
+`hal::uart_write_space` (new hal call) so a full TX ring drops a frame instead
+of desyncing the receiver. `task_crsf_tx` at 10 Hz: attitude + vario every
+tick, GPS and flight-mode interleaved (~2.5 Hz). Gated on `crsf::receiving()`.
+Climb rate is a 0.7 Hz-filtered dAGL/dt computed in `task_bmp` (`g_climb_mps`).
+Debug stream gains `EST,...,climb_mps=` and `CRSF_STAT,...,telem_tx=`.
+Verified: frame bytes/CRC checked against the CRSF spec for all five types.
+NEXT for telemetry: a pack-voltage divider on a spare ADC pin (e.g. PC4 =
+ADC1_IN14) -> `send_battery` -> EdgeTX low-battery callouts; optionally a
+temperature frame (0x0D) for the ESCs/IMU. Course-over-ground for the GPS
+heading field needs NMEA VTG (or the UBX-NAV-PVT switch in Phase 5).

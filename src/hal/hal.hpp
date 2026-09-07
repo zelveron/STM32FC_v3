@@ -113,6 +113,7 @@ Status uart_config      (Uart u, uint32_t baud);
 size_t uart_rx_available(Uart u);
 size_t uart_read        (Uart u, uint8_t* buf, size_t max);   // drains RX ring, never blocks
 size_t uart_write       (Uart u, const uint8_t* buf, size_t n); // enqueues; returns accepted count
+size_t uart_write_space (Uart u);   // bytes the TX ring can take right now (for atomic-frame writes)
 bool   uart_tx_idle     (Uart u);
 
 // --------------------------------------------------------------------------

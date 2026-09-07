@@ -58,6 +58,7 @@ Status uart_config      (Uart, uint32_t)              { return Status::unsupport
 size_t uart_rx_available(Uart)                        { return 0; }
 size_t uart_read        (Uart, uint8_t*, size_t)      { return 0; }
 size_t uart_write       (Uart, const uint8_t*, size_t n) { return n; }
+size_t uart_write_space (Uart)                        { return 4096; }
 bool   uart_tx_idle     (Uart)                        { return true; }
 
 Status pwm_config  (PwmGroup, uint32_t)               { return Status::unsupported; }
