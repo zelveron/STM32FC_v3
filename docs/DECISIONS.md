@@ -170,3 +170,18 @@ work: DMA circular RX + UART IDLE IRQ (CLAUDE.md spec; polled is fine at this
 rate for now), telemetry TX (battery/GPS/attitude/mode uplink), CRSF-flag
 failsafe. GOTCHA recorded: the ELRS Lua "output"/serial baud must be set to
 420000 to match.
+
+**2026-09-07 — Scheduler adopted in `main_stm32`.** The flat super-loop is
+gone: each old `if (millis()-last >= period)` block is now a free function
+registered with `sched::add()`, and `setup()` ends with `sched::run()`
+(`loop()` is empty). Tasks + rates: gps 50, bmi_retry 1, bmi 100, att 20,
+bmp 50, sd_log 50, debug 2, sched 1. Registration order = producers before
+consumers (bmi writes g_*/ahrs before att/sd_log read them). New `SCHED,*`
+line at 1 Hz reports per-task DWT min/mean/max us + overrun count + loop
+pass count + worst pass -- the GUI ignores unknown tags so the stream is
+otherwise identical. GPS drops from every-iteration to 50 Hz (20 ms between
+UART drains, safe for the RX ring at 9600 baud; ublox's internal autobaud/UBX
+timers are millis-based and unaffected). IWDG left off (commented) until
+MANUAL exists. This flash also first-verifies the hardware-SPI BMI323 driver
+(bit-bang deleted) on real hardware. Builds: black_f407ve RAM 9028 / Flash
+94468 B.
