@@ -156,3 +156,17 @@ length/CRC), decodes RC_CHANNELS_PACKED (0x16 -> 16x 11-bit -> us via
 (raw-992)*5/8+1500) and LINK_STATISTICS (0x14), counts frames/crc_err/resync.
 Verified via `[env:crsf_probe]` streaming RC/LINK/CRSF_STAT over USB. Real
 driver adds DMA circular RX + UART IDLE IRQ and telemetry TX later.
+
+**2026-09-07 — CRSF reader verified on hardware.** ER8 on USART3 (PB11/PB10),
+420000 8N1. After fixing the ELRS output baud (it was NOT 420000 -- a
+mismatch gives a continuous byte stream at a plausible rate but ZERO valid
+frames / zero CRC errors, because no byte lands on 0xC8): 30,000+ frames
+decoded, 1 CRC error (an RF bit-flip, correctly rejected), 0 resyncs. RC
+channels unpack correctly (throttle 989 at min, sticks 1500 centred, switches
+at 1000/1503/2011); LINK_STATISTICS decode (up_lq=100, up_rssi -30 dBm,
+up_snr 9 dB). Downlink stats read 0 -- no telemetry TX yet. `drivers/crsf`
+(polled HardwareSerial RX) and `hal::Uart::crsf` are correct. Remaining CRSF
+work: DMA circular RX + UART IDLE IRQ (CLAUDE.md spec; polled is fine at this
+rate for now), telemetry TX (battery/GPS/attitude/mode uplink), CRSF-flag
+failsafe. GOTCHA recorded: the ELRS Lua "output"/serial baud must be set to
+420000 to match.
