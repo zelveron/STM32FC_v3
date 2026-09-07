@@ -60,11 +60,44 @@ class MonitorApp:
         style.configure("Value.TLabel", font=("Helvetica", 16, "bold"), foreground="#ffffff")
         style.configure("TFrame", background=bg)
 
+        self.amber = "#fbbf24"
+        self.blue = "#3b82f6"
+
         # --- BMI status header ---
         self.status_var = tk.StringVar(value="BMI323: waiting...")
         status_lbl = tk.Label(root, textvariable=self.status_var, font=("Helvetica", 14, "bold"),
                               bg=bg, fg=red)
         status_lbl.pack(pady=(12, 8))
+
+        # --- Flight control section (mode manager / arming / failsafe) ---
+        fc_frame = ttk.LabelFrame(root, text="Flight control")
+        fc_frame.pack(fill="x", padx=16, pady=6)
+
+        self.mode_var = tk.StringVar(value="--")
+        self.mode_lbl = tk.Label(fc_frame, textvariable=self.mode_var,
+                                 font=("Helvetica", 20, "bold"), bg=bg, fg=fg)
+        self.mode_lbl.pack(pady=(6, 2))
+
+        self.mode_sub_var = tk.StringVar(value="requested --   ·   last change --")
+        tk.Label(fc_frame, textvariable=self.mode_sub_var, bg=bg, fg="#888888",
+                 font=("Helvetica", 10)).pack(pady=(0, 4))
+
+        self.armed_var = tk.StringVar(value="--")
+        self.failsafe_var = tk.StringVar(value="--")
+        self.lockout_var = tk.StringVar(value="--")
+        self.cal_var = tk.StringVar(value="--")
+        self._row(fc_frame, "Armed", self.armed_var)
+        self._row(fc_frame, "Failsafe", self.failsafe_var)
+        self._row(fc_frame, "Assist lockout", self.lockout_var)
+        self._row(fc_frame, "Gyro cal", self.cal_var)
+
+        # --- RC in / servo out ---
+        io_frame = ttk.LabelFrame(root, text="RC in  ·  servo out (µs)")
+        io_frame.pack(fill="x", padx=16, pady=6)
+        self.rc_var = tk.StringVar(value="A --  E --  T --  R --   arm --  mode --")
+        self.out_var = tk.StringVar(value="ail --/--  elev --/--  rud --  nose --  esc --/--")
+        self._row(io_frame, "RC", self.rc_var)
+        self._row(io_frame, "Out", self.out_var)
 
         # --- BMP section ---
         bmp_frame = ttk.LabelFrame(root, text="BMP581 (pressure)")
@@ -87,18 +120,6 @@ class MonitorApp:
 
         self._row(bmi_frame, "Accel", self.acc_var)
         self._row(bmi_frame, "Gyro", self.gyr_var)
-
-        # --- ALS section ---
-        als_frame = ttk.LabelFrame(root, text="ALS31300 (Hall)")
-        als_frame.pack(fill="x", padx=16, pady=6)
-
-        self.als_var = tk.StringVar(value="--, --, --")
-        self.als_temp_var = tk.StringVar(value="-- °C")
-        self.als_hdg_var = tk.StringVar(value="-- °")
-
-        self._row(als_frame, "Field X,Y,Z", self.als_var)
-        self._row(als_frame, "Temp", self.als_temp_var)
-        self._row(als_frame, "Heading", self.als_hdg_var)
 
         # --- GPS section ---
         gps_frame = ttk.LabelFrame(root, text="uBlox GNSS (NMEA)")
@@ -133,6 +154,7 @@ class MonitorApp:
         self._roll_deg = 0.0
         self._pitch_deg = 0.0
         self._yaw_deg = 0.0
+        self._last_mode_change = "--"
 
         self.horizon = tk.Canvas(att_frame, width=240, height=150,
                                  bg="#000000", highlightthickness=0)
@@ -157,6 +179,16 @@ class MonitorApp:
         frame.pack(fill="x", padx=8, pady=3)
         ttk.Label(frame, text=label, width=14, anchor="w").pack(side="left")
         ttk.Label(frame, textvariable=var, style="Value.TLabel", anchor="e").pack(side="right", fill="x", expand=True)
+
+    @staticmethod
+    def _kv(items):
+        """['a=1','b=2'] -> {'a':'1','b':'2'}; tolerates stray non-kv tokens."""
+        out = {}
+        for it in items:
+            if "=" in it:
+                k, _, v = it.partition("=")
+                out[k] = v
+        return out
 
     @staticmethod
     def _fix_label(fix):
@@ -263,16 +295,6 @@ class MonitorApp:
             self.acc_var.set(f"{vals[0]:+.4f}, {vals[1]:+.4f}, {vals[2]:+.4f} g")
             self.gyr_var.set(f"{vals[3]:+7.2f}, {vals[4]:+7.2f}, {vals[5]:+7.2f} dps")
 
-        elif tag == "ALS" and len(parts) == 6:
-            try:
-                x = int(parts[1]); y = int(parts[2]); z = int(parts[3])
-                t = float(parts[4]); hdg = float(parts[5])
-            except ValueError:
-                return
-            self.als_var.set(f"{x:+d}, {y:+d}, {z:+d}")
-            self.als_temp_var.set(f"{t:.1f} °C")
-            self.als_hdg_var.set(f"{hdg:.1f} °")
-
         elif tag == "ATT" and len(parts) == 4:
             try:
                 self._roll_deg = float(parts[1])
@@ -284,6 +306,52 @@ class MonitorApp:
             self.pitch_var.set(f"{self._pitch_deg:+.1f} °")
             self.yaw_var.set(f"{self._yaw_deg:+.1f} °")
             self._draw_horizon()
+
+        elif tag == "MODE":
+            kv = self._kv(parts[1:])
+            active = kv.get("active", "--")
+            self.mode_var.set(active)
+            self.mode_lbl.configure(fg={"MANUAL": self.amber, "ASSIST": self.green,
+                                        "AUTO": self.blue}.get(active, "#e0e0e0"))
+            req = kv.get("req", "--")
+            self.mode_sub_var.set(f"requested {req}   ·   last change {self._last_mode_change}")
+            armed = kv.get("armed") == "1"
+            self.armed_var.set("ARMED" if armed else "disarmed")
+            fs = kv.get("failsafe", "0")
+            self.failsafe_var.set("OK" if fs == "0" else f"ENGAGED (lvl {fs})")
+            lock = kv.get("assist_lockout") == "1"
+            self.lockout_var.set("LATCHED — IMU fault" if lock else "clear")
+
+        elif tag == "MODE_CHANGE" and len(parts) == 2:
+            # one-shot from the firmware on every bumpless switch; the 2 Hz MODE
+            # line redraws the sub-label with this value.
+            self._last_mode_change = f"{parts[1]} @ {time.strftime('%H:%M:%S')}"
+
+        elif tag == "EST":
+            kv = self._kv(parts[1:])
+            ready = kv.get("bias_ready") == "1"
+            trust = kv.get("acc_trust", "--")
+            self.cal_var.set(f"done  (acc_trust {trust})" if ready
+                             else f"calibrating…  hold still  (acc_trust {trust})")
+
+        elif tag == "CAL_DONE":
+            self.cal_var.set("done  (surface sweep now)")
+
+        elif tag == "RC" and len(parts) >= 17:
+            try:
+                us = [int(x) for x in parts[1:17]]
+            except ValueError:
+                return
+            self.rc_var.set(f"A {us[0]}  E {us[1]}  T {us[2]}  R {us[3]}   "
+                            f"arm {us[4]}  mode {us[6]}")
+
+        elif tag == "OUT" and len(parts) == 9:
+            try:
+                o = [int(x) for x in parts[1:9]]
+            except ValueError:
+                return
+            self.out_var.set(f"ail {o[0]}/{o[1]}  elev {o[2]}/{o[3]}  "
+                             f"rud {o[4]}  nose {o[5]}  esc {o[6]}/{o[7]}")
 
         elif tag == "GPS" and len(parts) == 8:
             try:
