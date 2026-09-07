@@ -16,8 +16,7 @@ public:
     const char* name() const override { return "MANUAL"; }
     void enter(const control::Outputs&) override {}   // nothing to preload
 
-    void update(const control::Sticks& sticks, float dt_s,
-                control::Outputs& out) override;
+    void update(const ModeInput& in, control::Outputs& out) override;
 
     control::MixParams params;   // tunable mix gains
 };

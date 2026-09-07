@@ -12,9 +12,15 @@ constexpr float kRad2Deg = 180.0f / kPi;
 // surge adds ~0.3-0.5 g of horizontal specific force, which tilts the measured
 // "gravity" -- reject it and coast on the gyro. (Kinematic / centripetal
 // compensation from GPS velocity comes with the nav filter, Phase 5.)
-constexpr float kMagBandG   = 0.10f;   // |a| must be within this of 1 g
-constexpr float kRateLoDps  = 30.0f;   // full trust below this body rate
-constexpr float kRateHiDps  = 120.0f;  // zero trust above this
+constexpr float kMagBandG   = 0.05f;   // |a| must be within this of 1 g
+// A coordinated fixed-wing turn sits near 1 g (the specific force stays roughly
+// body-down) so the magnitude gate alone will not reject it -- but the accel
+// still cannot see bank in a turn, and without kinematic (centripetal)
+// compensation it drags the estimate toward level. Body rate is the reliable
+// "we are maneuvering" signal: sustained turn rates are 10-25 dps, so coast on
+// the gyro there and only trust the accel when nearly rotation-free.
+constexpr float kRateLoDps  = 5.0f;    // full trust below this body rate
+constexpr float kRateHiDps  = 25.0f;   // zero trust above this
 
 float s_q[4]    = { 1, 0, 0, 0 };   // w,x,y,z  body->world
 float s_bias[3] = { 0, 0, 0 };      // rad/s

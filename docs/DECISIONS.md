@@ -278,3 +278,54 @@ Header-only, 6 native assertions. NOTE on timing: the calibration accumulates
 from the moment `task_bmi` starts (after setup(), ~1-3 s) and completes after
 ~4 s of the gyro span staying under 4 dps -- it is continuous, not timed;
 just do not move the aircraft until the surfaces wiggle.
+
+**2026-09-07 — ASSIST mode (FBWA): angle loop -> rate loop -> mixer.**
+`modes::ModeAssist` (Phase 4). Stick commands a clamped attitude *angle*
+(`_max_roll` 0.70 rad, `_max_pitch` 0.45 rad); yaw stick is a direct
+rate demand (`_max_yaw_rate` 80 dps); throttle is passthrough. Chain:
+`control::AttitudeController` (angle-P `110 dps/rad` + coordinated-turn pitch-up
+FF `g*tan(phi)*sin(phi)/V`, clamped) -> `control::RateController` (per-axis
+anti-windup PID, D-on-measurement + D-LPF) -> the SAME `mix_manual` /
+output map as MANUAL. Bumpless entry: `enter()` stashes the current outputs and
+`preset()`s the rate integrators on the first `update()` so the first command
+equals the held servo position. Rough first gains (FF-dominant per CLAUDE.md):
+roll kff/kp/ki 0.006/0.010/0.02, pitch 0.010/0.020/0.02, yaw kff/kp
+0.004/0.006 (no I). Verified in SITL only (`--assist-check`): holds commanded
+bank, no oscillation, bumpless, returns to level on release, no departure.
+Tune in flight.
+
+**2026-09-07 — AHRS accel-trust gate widened to reject turns; SITL surface
+signs fixed.** Two coupled findings while bringing up ASSIST in SITL:
+(1) `src/sitl/aircraft.cpp` used textbook aero surface signs (`Cm_de < 0`,
+`Cn_dr < 0` with trailing-edge-positive deflection), i.e. +elevator command
+gave nose *down* and +rudder gave yaw *left* -- opposite the project
+convention ("+elevator = pitch up, +rudder = yaw right"). MANUAL passed only
+because it is open-loop and the checks never tested pitch/yaw *direction*;
+ASSIST closed the loop and departed (nose to -90 deg, state NaN). Fixed by
+negating the elevator and rudder commands into the model's aero frame (aileron
+already agreed) and flipping the sign of the trim-elevator solve. (2) The
+gated complementary AHRS lost bank reference in a sustained turn: a
+coordinated fixed-wing turn sits near 1 g (specific force stays ~body-down) so
+the *magnitude* gate never closes, yet the accel still cannot see bank and,
+without centripetal compensation, drags roll toward level. Body rate is the
+reliable "maneuvering" signal, so the rate gate was tightened from full-trust
+< 30 dps / zero-trust > 120 dps to **< 5 dps / > 25 dps** -- a 10-25 dps turn
+now coasts on the gyro. `kMagBandG` also tightened 0.10 -> 0.05 g (throttle
+surge is 0.3-0.5 g, still fully rejected). Built-in `--check` AHRS errors
+unchanged (roll 0.9 deg, pitch 3.9 deg). KNOWN LIMITATION: sustained-turn
+attitude still under-reads true bank by ~4-5 deg (pure gyro integration, no
+kinematic/centripetal term) -- ASSIST bank authority is deliberately modest
+until GPS-velocity centripetal compensation lands with the Phase 5 nav filter.
+
+**2026-09-07 — Mode manager in `main_stm32`.** `task_control` now resolves the
+ch7 request through `resolve_mode()`: FAILSAFE -> MANUAL (not latched, recovers
+with the link); IMU not ready -> MANUAL and **latch `s_assist_lockout`**
+(demotion is downward-only and, for a sensor fault, permanent until reboot --
+CLAUDE.md); ASSIST also requires `bias_ready` (not latched, just waits); an
+AUTO (high) request resolves to MANUAL for now but the `MODE` line still shows
+`req=AUTO` so the mismatch is never silent. `set_mode()` calls `enter(s_out)`
+on the incoming mode for bumpless hand-off and emits `MODE_CHANGE,<name>`.
+`ModeInput` is built from `ahrs::` angles, the LPF'd bias-corrected body rates
+(`g_g*`), and an airspeed proxy = GPS ground speed floored at 10 m/s (no
+pitot; unreliable in wind). Log frame `mode` is now `s_mode_cur`. MANUAL and
+`core/failsafe` paths untouched.

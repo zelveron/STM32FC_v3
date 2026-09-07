@@ -31,6 +31,7 @@
 #include "control/mixer.hpp"
 #include "control/surface_test.hpp"
 #include "modes/mode_manual.hpp"
+#include "modes/mode_assist.hpp"
 #include "core/usb_stream.hpp"
 #include "core/log_ring.hpp"
 #include "core/log_frame.hpp"
@@ -49,14 +50,18 @@ constexpr int      kModeCh  = 6;      // ch7: 3-pos mode select (low/mid/high)
 constexpr uint16_t kArmHi   = 1700;  // arm switch "on" threshold, us
 constexpr uint32_t kServoHz = 333;
 
-// ch7 -> requested mode. Only MANUAL is implemented; a mid/high request is
-// reported but the aircraft stays in MANUAL.
+// ch7 -> requested mode. low = MANUAL, mid = ASSIST. AUTO (high) is not built
+// yet -- a high request resolves to MANUAL (see resolve_mode()); the MODE line
+// still reports req=AUTO so the mismatch is visible, never silent.
 inline modes::Id mode_from_ch(uint16_t us)
 {
     if (us < 1333) return modes::Id::manual;
     if (us < 1667) return modes::Id::assist;
     return modes::Id::auto_;
 }
+constexpr float kAirspeedFloorMps = 10.0f;   // GPS-speed proxy floor for the
+                                             // angle loop (no pitot; unreliable
+                                             // in wind -- see DECISIONS.md)
 inline const char* mode_name(modes::Id id)
 {
     return (id == modes::Id::manual) ? "MANUAL"
@@ -78,6 +83,10 @@ control::RcChannel  s_rc_roll, s_rc_pitch, s_rc_yaw;   // symmetric, 1000/1500/2
 control::RcChannel  s_rc_thr;                          // unipolar throttle
 control::SrvChannel s_srv[8];                          // per-output us mapping
 modes::ModeManual   s_mode_manual;
+modes::ModeAssist   s_mode_assist;
+modes::Mode*        s_mode_active = &s_mode_manual;    // current mode object
+modes::Id           s_mode_cur    = modes::Id::manual; // its id, for the log frame
+bool               s_assist_lockout = false;          // latched: IMU faulted in ASSIST
 control::SurfaceTest s_surface_test;                   // gyro-cal-done surface sweep
 core::Failsafe      s_failsafe;
 core::Arming        s_arming;
@@ -145,6 +154,34 @@ void task_crsf()   // 100 Hz -- drain USART3, parse CRSF, stream channels / link
     }
 }
 
+// Which mode may actually run this tick. Demotion is downward only and, for an
+// IMU fault, latched (CLAUDE.md "Flight modes"): once ASSIST has lost the IMU it
+// stays locked out until reboot. ASSIST also requires the gyro-bias cal to have
+// completed (unbiased rates) -- that gate is not latched, it just waits.
+modes::Id resolve_mode(modes::Id req, bool imu_ok, bool bias_ready, bool failsafe)
+{
+    if (failsafe) return modes::Id::manual;              // fall back, don't latch
+    if (!imu_ok)  { s_assist_lockout = true; return modes::Id::manual; }
+    if (req == modes::Id::assist && !s_assist_lockout && bias_ready)
+        return modes::Id::assist;
+    return modes::Id::manual;                            // AUTO request lands here too
+}
+
+// Switch the active mode, preloading it from the last outputs so the first
+// command equals the current servo position (bumpless -- a snap at speed loses
+// the airframe).
+void set_mode(modes::Id id)
+{
+    if (id == s_mode_cur) return;
+    modes::Mode* next = (id == modes::Id::assist)
+                      ? static_cast<modes::Mode*>(&s_mode_assist)
+                      : static_cast<modes::Mode*>(&s_mode_manual);
+    next->enter(s_out);
+    s_mode_active = next;
+    s_mode_cur    = id;
+    L().print(F("MODE_CHANGE,")); L().println(next->name());
+}
+
 void task_control()   // 400 Hz -- CRSF -> arming/failsafe -> mode -> mixer -> PWM
 {
     static uint32_t last_us = 0;
@@ -161,7 +198,7 @@ void task_control()   // 400 Hz -- CRSF -> arming/failsafe -> mode -> mixer -> P
     sticks.throttle = s_rc_thr.unipolar(ch.us[kThrCh]);
 
     s_failsafe.update(crsf::receiving(), millis());
-    s_mode_req = mode_from_ch(ch.us[kModeCh]);   // only MANUAL is acted on for now
+    s_mode_req = mode_from_ch(ch.us[kModeCh]);
 
     core::ArmInputs ai;
     ai.arm_switch      = ch.us[kArmCh] > kArmHi;
@@ -169,7 +206,21 @@ void task_control()   // 400 Hz -- CRSF -> arming/failsafe -> mode -> mixer -> P
     ai.failsafe_active = s_failsafe.active();
     s_arming.update(ai);
 
-    s_mode_manual.update(sticks, dt_s, s_out);
+    // --- mode manager: resolve request -> permitted mode, switch bumplessly ---
+    set_mode(resolve_mode(s_mode_req, s_bmi_ready, s_imu_prep.bias_ready(),
+                          s_failsafe.active()));
+
+    modes::ModeInput mi;
+    mi.sticks       = sticks;
+    mi.dt_s         = dt_s;
+    mi.roll_rad     = ahrs::roll_rad();
+    mi.pitch_rad    = ahrs::pitch_rad();
+    mi.yaw_rad      = ahrs::yaw_rad();
+    mi.gyro_p_dps   = g_gx;   // bias-corrected + LPF'd body rates from task_bmi
+    mi.gyro_q_dps   = g_gy;
+    mi.gyro_r_dps   = g_gz;
+    mi.airspeed_mps = fmaxf(ublox::speed_kmh() / 3.6f, kAirspeedFloorMps);
+    s_mode_active->update(mi, s_out);
 
     const bool armed = s_arming.armed();
 
@@ -320,7 +371,7 @@ void task_log()   // 50 Hz -- pack one binary frame into the ring (non-blocking)
     const crsf::Channels& ch = crsf::channels();
     for (int i = 0; i < 8; i++) { f.rc_us[i] = ch.us[i]; f.out_us[i] = s_out_us[i]; }
 
-    f.mode  = (uint8_t)s_mode_manual.id();
+    f.mode  = (uint8_t)s_mode_cur;
     f.flags = (uint8_t)((s_arming.armed()      ? core::LOG_ARMED    : 0) |
                         (s_failsafe.active()   ? core::LOG_FAILSAFE : 0) |
                         ((uint8_t)s_mode_req << core::LOG_REQMODE_SHIFT));
@@ -408,10 +459,11 @@ void task_debug()   // 2 Hz -- the low-rate GPS/SD debug lines keep their gates
     static uint32_t l_mode = 0;
     if ((now - l_mode) >= 500) {
         l_mode = now;
-        L().print(F("MODE,active="));  L().print(s_mode_manual.name());
+        L().print(F("MODE,active="));  L().print(s_mode_active->name());
         L().print(F(",req="));         L().print(mode_name(s_mode_req));
         L().print(F(",armed="));       L().print(s_arming.armed() ? 1 : 0);
         L().print(F(",failsafe="));    L().print((int)s_failsafe.level());
+        L().print(F(",assist_lockout=")); L().print(s_assist_lockout ? 1 : 0);
         L().println();
     }
 }
@@ -459,6 +511,20 @@ void setup()
     // window; keep the board still for the first few seconds after boot.
     s_imu_prep.configure(100.0f, 30.0f, 15.0f);
     ahrs::reset();
+
+    // ASSIST (FBWA): stick -> clamped attitude angle -> rate loop -> mixer.
+    // Rough first gains, verified only in SITL (--assist-check) -- FF-dominant
+    // per CLAUDE.md, small P, light I. Tune in flight. See docs/DECISIONS.md.
+    {
+        control::AttitudeCtrlConfig att;                 // defaults (110 dps/rad, turn-comp on)
+        control::RateCtrlConfig rate;
+        rate.sample_hz = 400.0f;                         // == task_control rate
+        rate.roll.kff = 0.006f; rate.roll.kp = 0.010f; rate.roll.ki = 0.02f;
+        rate.roll.i_max = 0.4f; rate.roll.d_lpf_hz = 25.0f;
+        rate.pitch = rate.roll; rate.pitch.kff = 0.010f; rate.pitch.kp = 0.020f;
+        rate.yaw   = rate.roll; rate.yaw.kff = 0.004f; rate.yaw.kp = 0.006f; rate.yaw.ki = 0.0f;
+        s_mode_assist.configure(att, rate, 0.70f, 0.45f, 80.0f);  // max roll/pitch rad, max yaw-rate dps
+    }
 
     // Servo / ESC PWM. SrvChannel defaults (1000/1500/2000) suit surfaces and,
     // via from_unipolar(), the ESCs (min 1000 = off). Per-airframe trim /

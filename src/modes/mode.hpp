@@ -3,8 +3,9 @@
 // mode.hpp -- flight mode interface. One transmitter channel, three positions:
 // MANUAL / ASSIST / AUTO. Sensor faults demote downward only, never promote.
 //
-// Modes are static instances (no heap). update() maps pilot sticks to the 8
-// normalized outputs; enter() preloads internal state for a bumpless switch.
+// Modes are static instances (no heap). update() maps the pilot input +
+// estimator feedback to the 8 normalized outputs; enter() preloads internal
+// state (PID integrators) for a bumpless switch.
 //
 // Portable.
 //
@@ -15,6 +16,16 @@ namespace modes {
 
 enum class Id : uint8_t { manual, assist, auto_ };
 
+struct ModeInput {
+    control::Sticks sticks;          // normalized pilot commands
+    float dt_s = 0.0025f;
+
+    // estimator feedback -- ASSIST / AUTO use it, MANUAL ignores it.
+    float roll_rad = 0.0f, pitch_rad = 0.0f, yaw_rad = 0.0f;
+    float gyro_p_dps = 0.0f, gyro_q_dps = 0.0f, gyro_r_dps = 0.0f;
+    float airspeed_mps = 0.0f;       // <= 0 -> unknown (turn comp skipped)
+};
+
 class Mode {
 public:
     virtual ~Mode() = default;
@@ -22,13 +33,12 @@ public:
     virtual Id          id()   const = 0;
     virtual const char* name() const = 0;
 
-    // Called once when this mode becomes active. `current` is the last set of
-    // outputs, so the mode can preload integrators for a bumpless transition.
+    // Called once when this mode becomes active. `current` = the outputs the
+    // previous mode was producing, so integrators can be preloaded for a
+    // bumpless transition.
     virtual void enter(const control::Outputs& current) = 0;
 
-    // Per control tick.
-    virtual void update(const control::Sticks& sticks, float dt_s,
-                        control::Outputs& out) = 0;
+    virtual void update(const ModeInput& in, control::Outputs& out) = 0;
 };
 
 } // namespace modes

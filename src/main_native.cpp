@@ -27,6 +27,7 @@
 #include "core/log_ring.hpp"
 #include "core/log_frame.hpp"
 #include "modes/mode_manual.hpp"
+#include "modes/mode_assist.hpp"
 
 #include <cstring>
 
@@ -312,11 +313,52 @@ int main()
     // --- mode_manual = passthrough via the mixer ---
     {
         modes::ModeManual m;
+        modes::ModeInput mi; mi.sticks = { 0.4f, 0.0f, 0.0f, 0.3f }; mi.dt_s = 0.0025f;
         control::Outputs o;
-        m.update({ 0.4f, 0.0f, 0.0f, 0.3f }, 0.0025f, o);
+        m.update(mi, o);
         fails += check("mode_manual: roll -> ailerons, throttle -> ESCs",
                        o.ch[0] == 0.4f && o.ch[1] == 0.4f &&
                        o.ch[6] == 0.3f && o.ch[7] == 0.3f);
+    }
+
+    // --- mode_assist: angle command, bumpless entry, closes to target ---
+    {
+        modes::ModeAssist m;
+        control::AttitudeCtrlConfig ac;
+        control::RateCtrlConfig rc;
+        rc.roll.kff = 0.006f; rc.roll.kp = 0.004f; rc.roll.ki = 0.05f;
+        rc.roll.i_max = 0.6f; rc.roll.out_min = -1; rc.roll.out_max = 1;
+        rc.pitch = rc.yaw = rc.roll;
+        m.configure(ac, rc, 0.7f, 0.5f, 90.0f);
+
+        // bumpless: enter() with a non-zero current output, first update reproduces it
+        control::Outputs cur{}; cur.ch[0] = cur.ch[1] = 0.25f;
+        m.enter(cur);
+        modes::ModeInput mi; mi.dt_s = 0.0025f;
+        mi.sticks = { 0.0f, 0.0f, 0.0f, 0.4f };   // sticks centred
+        control::Outputs o;
+        m.update(mi, o);
+        fails += check("mode_assist bumpless: first roll out ~ entry 0.25",
+                       std::fabs(o.ch[0] - 0.25f) < 0.1f);
+
+        // closed loop: hold roll stick right, level aircraft -> roll command drives positive
+        modes::ModeAssist m2;
+        m2.configure(ac, rc, 0.7f, 0.5f, 90.0f);
+        m2.enter(control::Outputs{});
+        float roll = 0.0f, gp = 0.0f;
+        for (int i = 0; i < 2000; i++) {   // 5 s @ 400 Hz, trivial roll integrator
+            modes::ModeInput in; in.dt_s = 0.0025f;
+            in.sticks = { 0.5f, 0.0f, 0.0f, 0.4f };   // want +0.35 rad bank
+            in.roll_rad = roll; in.gyro_p_dps = gp;
+            control::Outputs oo;
+            m2.update(in, oo);
+            // toy plant: aileron -> roll accel; heavy damping
+            const float acc = oo.ch[0] * 800.0f - gp * 4.0f;   // dps/s
+            gp   += acc * 0.0025f;
+            roll += gp * (3.14159f / 180.0f) * 0.0025f;
+        }
+        fails += check("mode_assist closes to ~+0.35 rad bank",
+                       roll > 0.20f && roll < 0.50f);
     }
 
     // --- log_ring ---

@@ -21,6 +21,7 @@
 #include "control/rc_channel.hpp"
 #include "control/srv_channel.hpp"
 #include "modes/mode_manual.hpp"
+#include "modes/mode_assist.hpp"
 #include "estimation/ahrs.hpp"
 
 namespace {
@@ -67,12 +68,14 @@ int main(int argc, char** argv)
 {
     double secs = 20.0, hz = 400.0;
     const char* script = nullptr;
-    bool check = false;
+    bool check = false, assist = false;
     for (int i = 1; i < argc; i++) {
         if (!std::strcmp(argv[i], "--secs")  && i + 1 < argc) secs = std::atof(argv[++i]);
         else if (!std::strcmp(argv[i], "--hz") && i + 1 < argc) hz = std::atof(argv[++i]);
         else if (!std::strcmp(argv[i], "--script") && i + 1 < argc) script = argv[++i];
         else if (!std::strcmp(argv[i], "--check")) { check = true; script = nullptr; secs = 20.0; }
+        else if (!std::strcmp(argv[i], "--assist")) assist = true;
+        else if (!std::strcmp(argv[i], "--assist-check")) { check = true; assist = true; script = nullptr; secs = 14.0; }
     }
     const double dt = 1.0 / hz;
 
@@ -86,9 +89,20 @@ int main(int argc, char** argv)
     std::fprintf(stderr, "trim: elevator=%.3f throttle=%.3f\n", de_trim, thr_trim);
 
     control::RcChannel rc_roll, rc_pitch, rc_yaw, rc_thr;
-    control::SrvChannel srv;          // default 1000/1500/2000, used only for range checks
-    modes::ModeManual   mode;
-    (void)srv;
+    modes::ModeManual  mode_manual;
+    modes::ModeAssist  mode_assist;
+    {
+        control::AttitudeCtrlConfig ac;   // defaults
+        control::RateCtrlConfig rc;
+        rc.roll.kff  = 0.006f; rc.roll.kp = 0.010f; rc.roll.ki = 0.02f;
+        rc.roll.i_max = 0.4f;  rc.roll.d_lpf_hz = 25.0f;
+        rc.pitch = rc.roll;    rc.pitch.kff = 0.010f; rc.pitch.kp = 0.020f;
+        rc.yaw   = rc.roll;    rc.yaw.kff  = 0.004f;  rc.yaw.kp  = 0.006f; rc.yaw.ki = 0.0f;
+        mode_assist.configure(ac, rc, 0.70f, 0.45f, 80.0f);
+    }
+    modes::Mode* mode = assist ? static_cast<modes::Mode*>(&mode_assist)
+                               : static_cast<modes::Mode*>(&mode_manual);
+    mode->enter(control::Outputs{});
 
     if (!check)
         std::printf("t,N,E,D,VN,VE,VD,roll_deg,pitch_deg,yaw_deg,p_dps,q_dps,r_dps,"
@@ -99,13 +113,24 @@ int main(int argc, char** argv)
     double roll_doublet_peak = 0;   // max roll during t in [2.0, 2.8]
     double end_roll = 0, end_pitch = 0, end_V = 0;
     double ahrs_roll_err_max = 0, ahrs_pitch_err_max = 0;
+    // --assist-check accumulators
+    double as_hold_bank_min = 999, as_hold_bank_max = -999;   // t in [3.5, 6]
+    double as_rollrate_abs_max = 0;                           // t in [3.5, 6]
+    double as_return_bank_abs = 999;                          // min |roll| in t [8.5, 10]
 
+    sitl::Sensors sn_prev = sitl::synth(ac.state());
     size_t si = 0;
     for (double t = 0.0; t < secs; t += dt) {
         StickCmd sc;
         if (script) {
             while (si + 1 < scripted.size() && scripted[si + 1].first <= t) si++;
             sc = scripted.empty() ? StickCmd{ 0, 0, 0, thr_trim } : scripted[si].second;
+        } else if (assist) {
+            // ASSIST maneuver: roll stick to +0.7 (t 1-7, target ~0.49 rad),
+            // release to level (t 7-14). Pitch nudge t 10-12.
+            sc = StickCmd{ 0.0, 0.0, 0.0, thr_trim };
+            if (t >= 1.0 && t < 7.0)  sc.roll  = 0.7;
+            if (t >= 10.0 && t < 12.0) sc.pitch = 0.4;
         } else {
             sc = builtin(t, thr_trim);
         }
@@ -123,8 +148,19 @@ int main(int argc, char** argv)
         st.yaw      = rc_yaw.norm(rc_us[3]);
         st.throttle = rc_thr.unipolar(rc_us[2]);
 
+        modes::ModeInput mi;
+        mi.sticks       = st;
+        mi.dt_s         = (float)dt;
+        mi.roll_rad     = ahrs::roll_rad();
+        mi.pitch_rad    = ahrs::pitch_rad();
+        mi.yaw_rad      = ahrs::yaw_rad();
+        mi.gyro_p_dps   = sn_prev.gx_dps;
+        mi.gyro_q_dps   = sn_prev.gy_dps;
+        mi.gyro_r_dps   = sn_prev.gz_dps;
+        mi.airspeed_mps = (float)ac.airspeed_mps();   // SITL has "airspeed"; on HW use GPS speed
+
         control::Outputs o;
-        mode.update(st, dt, o);
+        mode->update(mi, o);
         sitl::Controls u {
             o.ch[0],                          // aileron  (both sides same)
             o.ch[2] + de_trim,                // elevator + airframe trim
@@ -135,12 +171,26 @@ int main(int argc, char** argv)
         ac.step(u, dt);
         const sitl::State& s = ac.state();
         const sitl::Sensors sn = sitl::synth(s);
+        sn_prev = sn;
         ahrs::update(sn.ax_g, sn.ay_g, sn.az_g, sn.gx_dps, sn.gy_dps, sn.gz_dps, (float)dt);
 
         double roll, pitch, yaw;
         ac.euler(roll, pitch, yaw);
         const double rd = roll * kRad2Deg, pd = pitch * kRad2Deg;
 
+        if (check && assist) {
+            const double bank = ahrs::roll_rad();   // ASSIST controls the AHRS estimate
+            if (t >= 3.5 && t < 6.5) {
+                if (bank < as_hold_bank_min) as_hold_bank_min = bank;
+                if (bank > as_hold_bank_max) as_hold_bank_max = bank;
+                const double rr = std::fabs(sn.gx_dps);
+                if (rr > as_rollrate_abs_max) as_rollrate_abs_max = rr;
+            }
+            if (t >= 9.0 && t < 10.0 && std::fabs(bank) < as_return_bank_abs)
+                as_return_bank_abs = std::fabs(bank);
+            end_V = ac.airspeed_mps();
+            continue;
+        }
         if (check) {
             if (t < 1.9) {
                 if (std::fabs(rd) > trim_roll_max)  trim_roll_max = std::fabs(rd);
@@ -177,6 +227,27 @@ int main(int argc, char** argv)
             std::printf("[%s] %s\n", ok ? "PASS" : "FAIL", what);
             if (!ok) fails++;
         };
+
+        if (assist) {
+            const double tgt = 0.7 * 0.70;   // stick * max_roll_rad
+            const double hold_mid = 0.5 * (as_hold_bank_min + as_hold_bank_max);
+            std::fprintf(stderr,
+                "ASSIST: hold bank %.2f..%.2f rad (target %.2f), roll-rate max %.0f dps, "
+                "|bank| after release %.3f rad, V_end %.1f\n",
+                as_hold_bank_min, as_hold_bank_max, tgt, as_rollrate_abs_max,
+                as_return_bank_abs, end_V);
+            ck("ASSIST holds commanded bank (within 0.15 rad of target)",
+               std::fabs(hold_mid - tgt) < 0.15);
+            ck("ASSIST bank does not oscillate (roll-rate max < 120 dps)",
+               as_rollrate_abs_max < 120.0);
+            ck("ASSIST returns to ~level after stick release (|bank| < 0.12 rad)",
+               as_return_bank_abs < 0.12);
+            ck("ASSIST: no departure (airspeed_end in [10,30])",
+               end_V > 10.0 && end_V < 30.0);
+            std::printf(fails ? "\nRESULT: %d FAIL\n" : "\nRESULT: all pass\n", fails);
+            return fails;
+        }
+
         ck("trim holds: |roll|<2 deg over first 1.9 s",        trim_roll_max  < 2.0);
         ck("trim holds: |pitch|<6 deg",                        trim_pitch_max < 6.0);
         ck("trim holds: airspeed within 3 m/s of 18",          trim_V_err     < 3.0);

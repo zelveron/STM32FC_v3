@@ -71,11 +71,14 @@ void Aircraft::reset(double airspeed_mps, double alt_m)
     // lift ~ weight -> CL_trim -> alpha_trim; pitch moment 0 -> de_trim; T = D.
     const double CL_trim = W / (qbar * kS);
     const double alpha   = (CL_trim - kCL0) / kCLa;
-    const double de_rad  = -(kCm0 + kCm_a * alpha) / kCm_de;
+    const double de_rad  = -(kCm0 + kCm_a * alpha) / kCm_de;   // aero-frame elevator
     const double CD       = kCD0 + kCDk * CL_trim * CL_trim;
     const double D        = qbar * kS * CD;
 
-    _trim_de  = de_rad / kDefl;
+    // Controls use the PROJECT convention (+elevator command = pitch up); the
+    // model's aero frame has +de = nose down (kCm_de < 0). derivatives() negates
+    // the command, so the trim command is the negated aero-frame angle.
+    _trim_de  = -de_rad / kDefl;
     _trim_thr = D / (kTmax > 0 ? kTmax : 1.0);
     if (_trim_thr < 0) _trim_thr = 0; else if (_trim_thr > 1) _trim_thr = 1;
 
@@ -113,9 +116,14 @@ void Aircraft::derivatives(const State& s, const Controls& u, State& d) const
     const double beta  = std::asin(vb.y / Vs);
     const double qbar  = 0.5 * kRho * V * V;
 
-    const double da = u.aileron  * kDefl;
-    const double de = u.elevator * kDefl;
-    const double dr = u.rudder   * kDefl;
+    // Project surface-sign convention: +aileron = roll right, +elevator = pitch
+    // up, +rudder = yaw right. The model's aero coefficients are textbook
+    // (kCm_de < 0: +de => nose down; kCn_dr < 0: +dr => yaw left), so elevator
+    // and rudder commands are negated into the aero frame. Aileron already
+    // agrees (kCl_da > 0).
+    const double da =  u.aileron  * kDefl;
+    const double de = -u.elevator * kDefl;
+    const double dr = -u.rudder   * kDefl;
     const double p = s.omega_body.x, q = s.omega_body.y, r = s.omega_body.z;
 
     // --- aero force (stability axes -> body), small-angle ---
