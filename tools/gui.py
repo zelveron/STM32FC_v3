@@ -326,6 +326,13 @@ class MonitorApp:
             flying = kv.get("flying") == "1"
             self.integ_var.set("active (flying)" if flying else "frozen (on ground)")
 
+        elif tag == "CRSF_STAT":
+            kv = self._kv(parts[1:])
+            rx = kv.get("receiving") == "1"
+            tx = kv.get("telem_tx", "0")
+            self.footer_var.set(f"CRSF: link {'up' if rx else 'down'}  ·  "
+                                f"telem TX {tx} frames  ·  {self.port}")
+
         elif tag == "MODE_CHANGE" and len(parts) == 2:
             # one-shot from the firmware on every bumpless switch; the 2 Hz MODE
             # line redraws the sub-label with this value.
@@ -337,6 +344,10 @@ class MonitorApp:
             trust = kv.get("acc_trust", "--")
             self.cal_var.set(f"done  (acc_trust {trust})" if ready
                              else f"calibrating…  hold still  (acc_trust {trust})")
+            agl = kv.get("agl_m"); climb = kv.get("climb_mps")
+            if agl is not None:
+                extra = f"   ({float(climb):+.1f} m/s)" if climb is not None else ""
+                self.alt_var.set(f"{float(agl):.2f} m AGL{extra}")
 
         elif tag == "CAL_DONE":
             self.cal_var.set("done  (surface sweep now)")
