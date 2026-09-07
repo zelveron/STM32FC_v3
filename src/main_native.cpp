@@ -8,10 +8,14 @@
 // Exit 0 = pass, non-zero = fail.
 //
 #include <cstdio>
+#include <cmath>
 
 #include "hal/hal.hpp"
 #include "estimation/ahrs.hpp"
 #include "core/scheduler.hpp"
+#include "control/rc_channel.hpp"
+#include "control/srv_channel.hpp"
+#include "control/mixer.hpp"
 
 namespace {
 
@@ -58,6 +62,47 @@ int main()
 
     sched::TaskStats st;
     fails += check("get_stats(0) ok", sched::get_stats(0, st) && st.runs == g_fast_runs);
+
+    // --- RC_Channel ---
+    {
+        control::RcChannel rc;   // 1000/1500/2000, dz 8
+        fails += check("rc.norm(1500) == 0",          rc.norm(1500) == 0.0f);
+        fails += check("rc.norm(1505) == 0 (deadzone)", rc.norm(1505) == 0.0f);
+        fails += check("rc.norm(2000) ~ +1",          std::fabs(rc.norm(2000) - 1.0f) < 0.02f);
+        fails += check("rc.norm(1000) ~ -1",          std::fabs(rc.norm(1000) + 1.0f) < 0.02f);
+        fails += check("rc.unipolar(1000)==0, (2000)==1",
+                       rc.unipolar(1000) == 0.0f && std::fabs(rc.unipolar(2000) - 1.0f) < 1e-6f);
+        control::RcChannel rr; rr.reversed = true;
+        fails += check("rc reversed flips sign",      rr.norm(2000) < -0.9f);
+    }
+
+    // --- SRV_Channel (round-trips RC) ---
+    {
+        control::SrvChannel sv;
+        fails += check("srv.from_norm(0)==1500",  sv.from_norm(0.0f)  == 1500);
+        fails += check("srv.from_norm(+1)==2000", sv.from_norm(1.0f)  == 2000);
+        fails += check("srv.from_norm(-1)==1000", sv.from_norm(-1.0f) == 1000);
+        fails += check("srv.from_norm clamps",    sv.from_norm(5.0f)  == 2000);
+        fails += check("srv.from_unipolar(0.5)==1500", sv.from_unipolar(0.5f) == 1500);
+        fails += check("srv.safe: surface centre / throttle min",
+                       sv.safe_us(false) == 1500 && sv.safe_us(true) == 1000);
+        control::SrvChannel svr; svr.reversed = true;
+        fails += check("srv reversed: from_norm(+1)==1000", svr.from_norm(1.0f) == 1000);
+    }
+
+    // --- mixer (MANUAL passthrough) ---
+    {
+        control::MixParams p;   // unit gains, diff thrust off
+        control::Outputs o;
+        control::mix_manual({ 1.0f, 0.0f, 0.0f, 0.0f }, p, o);   // full right roll
+        fails += check("mix: roll -> both ailerons +1, nothing else",
+                       o.ch[0] == 1.0f && o.ch[1] == 1.0f &&
+                       o.ch[2] == 0.0f && o.ch[3] == 0.0f && o.ch[4] == 0.0f);
+        control::mix_manual({ 0.0f, -0.5f, 0.0f, 0.6f }, p, o);
+        fails += check("mix: elevator L==R, ESC L==R==throttle",
+                       o.ch[2] == -0.5f && o.ch[3] == -0.5f &&
+                       o.ch[6] == 0.6f && o.ch[7] == 0.6f);
+    }
 
     std::printf(fails ? "\nRESULT: %d FAIL\n" : "\nRESULT: all pass\n", fails);
     return fails;

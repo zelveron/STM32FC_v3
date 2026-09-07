@@ -9,6 +9,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <SPI.h>
+#include <HardwareTimer.h>
 
 // ---------------------------------------------------------------------------
 // Named pins (declared extern in hal.hpp)
@@ -199,10 +200,37 @@ bool uart_tx_idle(Uart u)
 }
 
 // ---------------------------------------------------------------------------
-// PWM -- not implemented (Phase 2: servo / ESC output).
+// PWM servo / ESC output.
+//   out_1_4 -> TIM4 CH1..4  = PD12 PD13 PD14 PD15
+//   out_5_8 -> TIM1 CH1..4  = PE9  PE11 PE13 PE14
+// setPWM() inits each channel (0% duty = no pulse until pwm_write_us). The
+// pulse is then set directly in microseconds. Channels are 0-indexed here,
+// 1-indexed in HardwareTimer.
 // ---------------------------------------------------------------------------
-Status pwm_config  (PwmGroup, uint32_t)                 { return Status::unsupported; }
-Status pwm_write_us(PwmGroup, uint8_t, uint16_t)        { return Status::unsupported; }
+static const uint32_t kPwmPins14[4] = { PD12, PD13, PD14, PD15 };
+static const uint32_t kPwmPins58[4] = { PE9,  PE11, PE13, PE14 };
+
+static HardwareTimer* pwm_timer(PwmGroup g)
+{
+    if (g == PwmGroup::out_1_4) { static HardwareTimer t(TIM4); return &t; }
+    else                        { static HardwareTimer t(TIM1); return &t; }
+}
+
+Status pwm_config(PwmGroup g, uint32_t frame_hz)
+{
+    HardwareTimer* t = pwm_timer(g);
+    const uint32_t* pins = (g == PwmGroup::out_1_4) ? kPwmPins14 : kPwmPins58;
+    for (uint32_t ch = 0; ch < 4; ch++)
+        t->setPWM(ch + 1, pins[ch], frame_hz, 0);   // 0% duty -> no pulse yet
+    return Status::ok;
+}
+
+Status pwm_write_us(PwmGroup g, uint8_t channel, uint16_t pulse_us)
+{
+    if (channel > 3) return Status::error;
+    pwm_timer(g)->setCaptureCompare(channel + 1, pulse_us, MICROSEC_COMPARE_FORMAT);
+    return Status::ok;
+}
 
 // ---------------------------------------------------------------------------
 // SD block device -- not implemented. The bench CSV logger still drives the
