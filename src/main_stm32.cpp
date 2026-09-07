@@ -62,6 +62,14 @@ inline modes::Id mode_from_ch(uint16_t us)
 constexpr float kAirspeedFloorMps = 10.0f;   // GPS-speed proxy floor for the
                                              // angle loop (no pitot; unreliable
                                              // in wind -- see DECISIONS.md)
+
+// "flying" latch: once armed, the ASSIST stabilizer integrators stay frozen
+// until one of these trips (then held until disarm). Set clear of taxi: 0.75
+// throttle is takeoff power on the twin EDF, well above any taxi setting;
+// 8 m/s (~29 km/h) is above a fast taxi but below this airframe's rotation
+// speed, so it latches during the takeoff roll.
+constexpr float kFlyThrottle       = 0.75f;
+constexpr float kFlyGroundSpeedMps = 8.0f;
 inline const char* mode_name(modes::Id id)
 {
     return (id == modes::Id::manual) ? "MANUAL"
@@ -215,7 +223,8 @@ void task_control()   // 400 Hz -- CRSF -> arming/failsafe -> mode -> mixer -> P
     // you spool up or roll, they arm and re-preset bumplessly).
     if (!armed) {
         s_flying = false;
-    } else if (sticks.throttle > 0.25f || (ublox::speed_kmh() * (1.0f / 3.6f)) > 3.0f) {
+    } else if (sticks.throttle > kFlyThrottle ||
+               (ublox::speed_kmh() * (1.0f / 3.6f)) > kFlyGroundSpeedMps) {
         s_flying = true;
     }
 

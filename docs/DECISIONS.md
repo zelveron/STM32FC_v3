@@ -341,7 +341,8 @@ rolls, the error clears) but a real off-centre surface at launch. Fix:
 `Pid::set_integrator_enabled(bool)` (I still contributes to the output, just
 stops accumulating) fanned out through `RateController` and driven from a new
 `ModeInput::allow_integrators`. `main_stm32` sets it from an `s_flying` latch:
-false until `armed && (throttle > 0.25 || GPS ground speed > 3 m/s)`, then held
+false until `armed && (throttle > 0.75 || GPS ground speed > 8 m/s)` -- set clear
+of taxi -- then held
 true until disarm. On the false->true edge `ModeAssist` re-presets the
 integrators so they resume bumplessly from a clean state, not a wound rail.
 MANUAL ignores the flag. `MODE` line gains `flying=`; GUI shows "Stab
