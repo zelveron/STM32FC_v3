@@ -213,3 +213,19 @@ and streams `OUT,<8 us>` (20 Hz) + `MODE,<name>,armed=,failsafe=` (2 Hz).
 34 native assertions pass. Servos not wired yet -- verified via the `OUT,`
 stream responding to sticks; servo/scope check comes when the airframe is
 wired. IWDG still off. Sign conventions stated in mixer.hpp.
+
+**2026-09-07 — Binary ring-buffer logger replaces the CSV logger.** The CSV
+logger blocked up to 74 ms on `f_sync` (and ~3 ms/record on `sprintf` of 17
+floats), racking up ~590 `control`-task overruns per 16 s. Replaced with:
+`core/log_ring` (8 KB SPSC byte ring, non-blocking push, drop+count on
+overflow) + `core/log_frame` (86-byte packed record: magic, t_ms, IMU as
+g*2048/dps*16 int16, attitude deg*100 int16, baro, GPS, 8 RC us, 8 output us,
+mode+flags, CRC-16/CCITT) + `core/sd_bin_log` (STM32-only; opens FLTxxxxx.BIN,
+writes a LogFileHeader, `flush_step()` drains 512-byte-aligned sectors,
+`sync()` on a ~5 s cadence -- no f_sync in the hot path). `main_stm32`:
+`task_log` @ 50 Hz packs a frame into the ring (~few us), `task_log_flush`
+@ 25 Hz drains it (the SD blocking is now isolated in one low-rate task, not
+the CSV logger inside a 50 Hz task). `tools/parse_bin_log.py` decodes to CSV.
+`sd_csv_log.{hpp,cpp}` deleted (recoverable from git). RAM +8 KB for the ring.
+The remaining ~1-3 ms/sector SD write latency goes to zero with DMA SDIO
+(`hal::blk_write` async) + 4-bit mode -- a later item.

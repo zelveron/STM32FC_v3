@@ -187,7 +187,7 @@ These are not style preferences. Violating them is a bug.
    Everything in `src/core/`, `src/estimation/`, `src/control/` and `src/modes/`
    must compile on the native desktop target. Need hardware? Add a method to the
    `hal::` interface and implement it in *both* backends.
-   *Documented exception:* `src/core/usb_stream.*` and `src/core/sd_csv_log.*`
+   *Documented exception:* `src/core/usb_stream.*` and `src/core/sd_bin_log.*`
    are throwaway bench scaffolding (USB CDC telemetry + CSV SD log) that use
    Arduino directly and are excluded from `[env:native]`. They are deleted when
    the USB path goes. Do not add more exceptions; do not "fix" these.
@@ -238,8 +238,8 @@ src/
     stm32/          real hardware (may call HAL_*/LL_* directly)    [exists]
     native/         desktop backend for tests and SITL             [exists]
   drivers/          bmi323, bmp581, ublox [exist]; crsf, esc_out — depend on hal only
-  core/             scheduler, failsafe, arming [exist]; params, logger [none yet];
-                    usb_stream, sd_csv_log [exist, BENCH — see rule 1 exception]
+  core/             scheduler, failsafe, arming, log_ring, log_frame [exist];
+                    params [none yet]; usb_stream, sd_bin_log [exist, BENCH — rule 1 exception]
   estimation/       ahrs [exists]; ins, baro_alt, nav_filter
   control/          rc_channel, srv_channel, mixer [exist]; pid, rate_ctrl, attitude_ctrl, tecs, nav_l1
   modes/            mode.hpp + mode_manual [exist]; mode_assist, mode_auto

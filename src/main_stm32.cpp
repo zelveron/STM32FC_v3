@@ -13,6 +13,7 @@
 //
 #include <Arduino.h>
 #include <math.h>
+#include <string.h>
 
 #include "hal/hal.hpp"
 #include "core/scheduler.hpp"
@@ -28,7 +29,9 @@
 #include "control/mixer.hpp"
 #include "modes/mode_manual.hpp"
 #include "core/usb_stream.hpp"
-#include "core/sd_csv_log.hpp"
+#include "core/log_ring.hpp"
+#include "core/log_frame.hpp"
+#include "core/sd_bin_log.hpp"
 
 namespace {
 
@@ -77,6 +80,7 @@ core::Arming        s_arming;
 control::Outputs    s_out;                             // last outputs (bumpless)
 uint16_t            s_out_us[8] = { 0,0,0,0,0,0,0,0 }; // last pulses, for OUT,
 modes::Id           s_mode_req  = modes::Id::manual;   // requested via ch7
+core::LogRing       s_log_ring;                        // binary log producers -> SD
 
 // ---------------------------------------------------------------------------
 // Scheduler tasks (one per old loop() block; timing gates are now the
@@ -253,19 +257,47 @@ void task_bmp()   // 50 Hz -- driver self-gates the ~10 Hz trigger/collect
     L().println(alt, 2);
 }
 
-void task_sd_log()   // 50 Hz
+void task_log()   // 50 Hz -- pack one binary frame into the ring (non-blocking)
 {
-    if (!sd_csv_log::ok() || !s_bmi_ready) return;
-    const sd_csv_log::Row row {
-        millis(),
-        g_ax, g_ay, g_az, g_gx, g_gy, g_gz,
-        ahrs::roll_rad()  * kRadToDeg,
-        ahrs::pitch_rad() * kRadToDeg,
-        ahrs::yaw_rad()   * kRadToDeg,
-        g_press_hpa, g_temp_c, g_alt_m,
-        ublox::time_str(), ublox::sats(), ublox::speed_kmh(),
-    };
-    sd_csv_log::write_row(row);
+    core::LogFrame f;
+    memset(&f, 0, sizeof(f));
+    f.t_ms = millis();
+
+    f.acc[0] = (int16_t)(g_ax * core::kLogAccScale);
+    f.acc[1] = (int16_t)(g_ay * core::kLogAccScale);
+    f.acc[2] = (int16_t)(g_az * core::kLogAccScale);
+    f.gyr[0] = (int16_t)(g_gx * core::kLogGyrScale);
+    f.gyr[1] = (int16_t)(g_gy * core::kLogGyrScale);
+    f.gyr[2] = (int16_t)(g_gz * core::kLogGyrScale);
+    f.att[0] = (int16_t)(ahrs::roll_rad()  * kRadToDeg * core::kLogAngScale);
+    f.att[1] = (int16_t)(ahrs::pitch_rad() * kRadToDeg * core::kLogAngScale);
+    f.att[2] = (int16_t)(ahrs::yaw_rad()   * kRadToDeg * core::kLogAngScale);
+
+    f.press_pa      = g_press_hpa * 100.0f;
+    f.temp_dC       = (int16_t)(g_temp_c * 10.0f);
+    f.alt_mm        = (int32_t)(g_alt_m * 1000.0f);
+    f.lat_1e7       = (int32_t)(ublox::lat_deg() * 1e7);
+    f.lon_1e7       = (int32_t)(ublox::lon_deg() * 1e7);
+    f.gps_alt_mm    = (int32_t)(ublox::alt_m() * 1000.0f);
+    f.gps_speed_cms = (uint16_t)(ublox::speed_kmh() * (100.0f / 3.6f));
+    f.gps_sats      = (uint8_t)ublox::sats();
+    f.gps_fix       = (uint8_t)ublox::fix();
+
+    const crsf::Channels& ch = crsf::channels();
+    for (int i = 0; i < 8; i++) { f.rc_us[i] = ch.us[i]; f.out_us[i] = s_out_us[i]; }
+
+    f.mode  = (uint8_t)s_mode_manual.id();
+    f.flags = (uint8_t)((s_arming.armed()      ? core::LOG_ARMED    : 0) |
+                        (s_failsafe.active()   ? core::LOG_FAILSAFE : 0) |
+                        ((uint8_t)s_mode_req << core::LOG_REQMODE_SHIFT));
+
+    core::log_frame_finalize(f);
+    s_log_ring.push(&f, sizeof(f));   // drops + counts if the ring is full
+}
+
+void task_log_flush()   // 25 Hz -- drain 512-byte sectors to SD (blocking lives here)
+{
+    sd_bin_log::flush_step();
 }
 
 void task_debug()   // 2 Hz -- the low-rate GPS/SD debug lines keep their gates
@@ -306,9 +338,12 @@ void task_debug()   // 2 Hz -- the low-rate GPS/SD debug lines keep their gates
     static uint32_t l_sd = 0;
     if ((now - l_sd) >= 5000) {
         l_sd = now;
+        sd_bin_log::sync();                          // commit FAT/dir, ~5 s cadence
         L().print(F("SD_DBG,"));
-        L().print(sd_csv_log::ok() ? 1 : 0); L().print(F(","));
-        L().print(sd_csv_log::name());       L().print(F(","));
+        L().print(sd_bin_log::ok() ? 1 : 0);         L().print(F(","));
+        L().print(sd_bin_log::name());               L().print(F(",bytes="));
+        L().print(sd_bin_log::bytes_written());      L().print(F(",log_drops="));
+        L().print(s_log_ring.drops());               L().print(F(",usb_drops="));
         L().print(usb_stream::drops());
         L().println();
     }
@@ -382,12 +417,12 @@ void setup()
     L().println(bmp_ok ? F("BMP_STATUS,1") : F("BMP_STATUS,0"));
     ublox::drain_rx();
 
-    switch (sd_csv_log::begin()) {
-        case sd_csv_log::Result::ok:
-            L().print(F("SD_STATUS,1,")); L().println(sd_csv_log::name()); break;
-        case sd_csv_log::Result::open_failed:
+    switch (sd_bin_log::begin(s_log_ring)) {
+        case sd_bin_log::Result::ok:
+            L().print(F("SD_STATUS,1,")); L().println(sd_bin_log::name()); break;
+        case sd_bin_log::Result::open_failed:
             L().println(F("SD_STATUS,0,open_failed")); break;
-        case sd_csv_log::Result::begin_failed:
+        case sd_bin_log::Result::begin_failed:
             L().println(F("SD_STATUS,0,begin_failed")); break;
     }
 
@@ -400,7 +435,8 @@ void setup()
     sched::add("control",  400, task_control);
     sched::add("att",       20, task_att_out);
     sched::add("bmp",       50, task_bmp);
-    sched::add("sd_log",    50, task_sd_log);
+    sched::add("log",       50, task_log);        // pack frame -> ring (fast)
+    sched::add("log_flush", 25, task_log_flush);  // ring -> SD (blocking, isolated)
     sched::add("debug",      2, task_debug);
     sched::add("sched",      1, task_sched_report);
 
