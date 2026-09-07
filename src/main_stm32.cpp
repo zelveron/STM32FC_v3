@@ -19,6 +19,7 @@
 #include "drivers/bmi323.hpp"
 #include "drivers/bmp581.hpp"
 #include "drivers/ublox.hpp"
+#include "drivers/crsf.hpp"
 #include "estimation/ahrs.hpp"
 #include "core/usb_stream.hpp"
 #include "core/sd_csv_log.hpp"
@@ -67,6 +68,30 @@ void task_gps()   // 50 Hz -- drain UART, parse, emit position / status
         L().print(ublox::fix());        L().print(',');
         L().print(ublox::time_str());   L().print(',');
         L().println(ublox::speed_kmh(), 1);
+    }
+}
+
+void task_crsf()   // 100 Hz -- drain USART3, parse CRSF, stream channels / link
+{
+    const uint8_t ev = crsf::poll();
+
+    static uint32_t last_rc = 0;
+    if ((ev & crsf::EV_RC) && (millis() - last_rc) >= 50) {   // 20 Hz to USB
+        last_rc = millis();
+        const crsf::Channels& ch = crsf::channels();
+        L().print(F("RC"));
+        for (int i = 0; i < 16; i++) { L().print(','); L().print(ch.us[i]); }
+        L().println();
+    }
+
+    static uint32_t last_link = 0;
+    if ((ev & crsf::EV_LINK) && (millis() - last_link) >= 200) {   // 5 Hz
+        last_link = millis();
+        const crsf::LinkStats& lk = crsf::link();
+        L().print(F("LINK,up_rssi_dbm=")); L().print(lk.up_rssi_dbm);
+        L().print(F(",up_lq="));           L().print(lk.up_lq);
+        L().print(F(",up_snr="));          L().print(lk.up_snr);
+        L().print(F(",rf_mode="));         L().println(lk.rf_mode);
     }
 }
 
@@ -199,6 +224,16 @@ void task_debug()   // 2 Hz -- the low-rate GPS/SD debug lines keep their gates
         L().print(usb_stream::drops());
         L().println();
     }
+
+    static uint32_t l_crsf = 0;
+    if ((now - l_crsf) >= 1000) {
+        l_crsf = now;
+        L().print(F("CRSF_STAT,receiving=")); L().print(crsf::receiving() ? 1 : 0);
+        L().print(F(",frames_ok="));          L().print(crsf::frames_ok());
+        L().print(F(",crc_err="));            L().print(crsf::crc_errors());
+        L().print(F(",resync="));             L().print(crsf::resyncs());
+        L().println();
+    }
 }
 
 void task_sched_report()   // 1 Hz -- per-task DWT timing + overruns
@@ -226,6 +261,7 @@ void setup()
 
     usb_stream::begin();
     ublox::begin(kGpsBootBaud);
+    crsf::begin(420000);   // ER8 on USART3 (PB11 rx / PB10 tx), 420000 8N1
 
     // Bounded wait for the USB host, draining the u-blox boot burst meanwhile.
     for (int i = 0; i < 300 && !usb_stream::host_ready(); i++) {
@@ -254,6 +290,7 @@ void setup()
     // Register order matters: producers before consumers within a pass
     // (bmi writes g_*/ahrs, then att_out and sd_log read them).
     sched::add("gps",       50, task_gps);
+    sched::add("crsf",     100, task_crsf);
     sched::add("bmi_retry",  1, task_bmi_retry);
     sched::add("bmi",      100, task_bmi);
     sched::add("att",       20, task_att_out);

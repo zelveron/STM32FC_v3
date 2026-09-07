@@ -185,3 +185,12 @@ timers are millis-based and unaffected). IWDG left off (commented) until
 MANUAL exists. This flash also first-verifies the hardware-SPI BMI323 driver
 (bit-bang deleted) on real hardware. Builds: black_f407ve RAM 9028 / Flash
 94468 B.
+
+**2026-09-07 — CRSF wired into the flight firmware.** `main_stm32` now calls
+`crsf::begin(420000)` in setup and runs `task_crsf` at 100 Hz (CLAUDE.md
+scheduler table: "100 Hz | CRSF parse"). It streams `RC,<16 us>` at 20 Hz and
+`LINK,...` at 5 Hz over USB, and `task_debug` gains a `CRSF_STAT` line. Added
+`-D SERIAL_RX_BUFFER_SIZE=256` to `black_f407ve`: CRSF is ~10 kB/s, so a
+100 Hz poll buffers ~100 B between calls and the core's 64 B RX ring would
+overflow. The proper fix is DMA circular RX + UART IDLE IRQ ("come back to A").
+Nothing consumes the channels yet -- RC_Channel / mixer / mode_manual are next.
