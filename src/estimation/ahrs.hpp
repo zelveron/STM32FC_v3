@@ -1,30 +1,44 @@
 #pragma once
 //
-// ahrs.hpp -- attitude estimate (complementary filter).
+// ahrs.hpp -- attitude estimate: gated complementary filter (Mahony) with
+// online gyro-bias estimation.
 //
-// Portable: no hal, no hardware. The caller owns the clock and passes dt_s.
+// Quaternion state (no Euler gimbal lock). The accel correction is gated: it
+// is trusted only when |accel| is near 1 g and the body rate is low, so
+// launch / gusts / maneuvering do not pull the attitude toward the specific-
+// force vector. When the accel is not trusted the estimate coasts on the
+// (bias-corrected) gyro.
 //
-// NOT flight-grade. Fixed blend gain, no accel gating, no gyro-bias
-// calibration, unreferenced (drifting) yaw. Phase 1 replaces this with a
-// gated complementary AHRS + bias estimation.
+// Yaw is still unreferenced -- no magnetometer. With the online bias estimate
+// its drift is small; for fixed-wing, GPS ground course covers heading once
+// moving (CLAUDE.md).
 //
-// Frame: body FRD (X fwd, Y right, Z down). +roll = right wing down,
-// +pitch = nose up, +yaw = clockwise from above. State is radians.
+// Frame: body FRD, world NED. +roll = right wing down, +pitch = nose up,
+// +yaw = clockwise from above. State is radians.
+//
+// Portable.
 //
 #include <cstdint>
 
 namespace ahrs {
 
-// Re-seed roll/pitch from the next sample's accel; zero yaw.
+// Re-seed roll/pitch from the next sample's accel; zero yaw; clear bias.
 void reset();
 
-// One filter step. accel in g, gyro in deg/s, dt in seconds.
+// accel in g, gyro in deg/s, dt in seconds. (IMU is expected pre-conditioned:
+// bias-calibrated + low-passed -- see estimation/imu_prep.)
 void update(float ax_g, float ay_g, float az_g,
-            float gx_dps, float gy_dps, float gz_dps,
-            float dt_s);
+            float gx_dps, float gy_dps, float gz_dps, float dt_s);
 
 float roll_rad();
 float pitch_rad();
-float yaw_rad();   // wrapped to [-pi, pi]
+float yaw_rad();
+
+// --- diagnostics ---
+void  gyro_bias_dps(float& bx, float& by, float& bz);
+float acc_trust();   // 0..1 weight applied to the last accel correction
+
+// --- tuning (sane defaults set at first use) ---
+void  set_gains(float kp, float ki);
 
 } // namespace ahrs

@@ -24,6 +24,8 @@
 #include "drivers/ublox.hpp"
 #include "drivers/crsf.hpp"
 #include "estimation/ahrs.hpp"
+#include "estimation/imu_prep.hpp"
+#include "estimation/baro_alt.hpp"
 #include "control/rc_channel.hpp"
 #include "control/srv_channel.hpp"
 #include "control/mixer.hpp"
@@ -81,6 +83,9 @@ control::Outputs    s_out;                             // last outputs (bumpless
 uint16_t            s_out_us[8] = { 0,0,0,0,0,0,0,0 }; // last pulses, for OUT,
 modes::Id           s_mode_req  = modes::Id::manual;   // requested via ch7
 core::LogRing       s_log_ring;                        // binary log producers -> SD
+estimation::ImuPrep s_imu_prep;                        // gyro-bias cal + LPF
+estimation::BaroAlt s_baro_alt;                        // ground-referenced altitude
+float               g_alt_agl_m = 0.0f;
 
 // ---------------------------------------------------------------------------
 // Scheduler tasks (one per old loop() block; timing gates are now the
@@ -217,18 +222,22 @@ void task_bmi()   // 100 Hz -- read IMU, run AHRS, stream BMI line
     const float dt_s = (s_att_last_us == 0) ? 0.01f
                                             : (float)(now_us - s_att_last_us) * 1e-6f;
     s_att_last_us = now_us;
-    ahrs::update(s.ax_g, s.ay_g, s.az_g, s.gx_dps, s.gy_dps, s.gz_dps, dt_s);
 
-    g_ax = s.ax_g;   g_ay = s.ay_g;   g_az = s.az_g;
-    g_gx = s.gx_dps; g_gy = s.gy_dps; g_gz = s.gz_dps;
+    // bias-correct + low-pass, then run the gated AHRS
+    const estimation::ImuSample p = s_imu_prep.process(
+        s.gx_dps, s.gy_dps, s.gz_dps, s.ax_g, s.ay_g, s.az_g, dt_s);
+    ahrs::update(p.ax_g, p.ay_g, p.az_g, p.gx_dps, p.gy_dps, p.gz_dps, dt_s);
+
+    g_ax = p.ax_g;   g_ay = p.ay_g;   g_az = p.az_g;
+    g_gx = p.gx_dps; g_gy = p.gy_dps; g_gz = p.gz_dps;
 
     L().print(F("BMI,"));
-    L().print(s.ax_g, 4);   L().print(',');
-    L().print(s.ay_g, 4);   L().print(',');
-    L().print(s.az_g, 4);   L().print(',');
-    L().print(s.gx_dps, 2); L().print(',');
-    L().print(s.gy_dps, 2); L().print(',');
-    L().println(s.gz_dps, 2);
+    L().print(p.ax_g, 4);   L().print(',');
+    L().print(p.ay_g, 4);   L().print(',');
+    L().print(p.az_g, 4);   L().print(',');
+    L().print(p.gx_dps, 2); L().print(',');
+    L().print(p.gy_dps, 2); L().print(',');
+    L().println(p.gz_dps, 2);
 }
 
 void task_att_out()   // 20 Hz
@@ -246,10 +255,14 @@ void task_bmp()   // 50 Hz -- driver self-gates the ~10 Hz trigger/collect
     if (!bmp581::poll(bs)) return;
 
     const float p_pa = bs.pressure_pa;
-    const float alt  = 44330.0f * (1.0f - powf(p_pa / 101325.0f, 0.1902632f));
+    const float alt  = 44330.0f * (1.0f - powf(p_pa / 101325.0f, 0.1902632f));   // absolute (ISA)
     g_press_hpa = p_pa / 100.0f;
     g_temp_c    = bs.temp_c;
     g_alt_m     = alt;
+
+    // ground reference: track the latest pressure while disarmed, freeze on arm.
+    if (!s_arming.armed()) s_baro_alt.set_ground(p_pa);
+    g_alt_agl_m = s_baro_alt.alt_m(p_pa);
 
     L().print(F("BMP,"));
     L().print(p_pa / 100.0f, 3); L().print(',');
@@ -275,7 +288,7 @@ void task_log()   // 50 Hz -- pack one binary frame into the ring (non-blocking)
 
     f.press_pa      = g_press_hpa * 100.0f;
     f.temp_dC       = (int16_t)(g_temp_c * 10.0f);
-    f.alt_mm        = (int32_t)(g_alt_m * 1000.0f);
+    f.alt_mm        = (int32_t)(g_alt_agl_m * 1000.0f);   // AGL vs ground ref
     f.lat_1e7       = (int32_t)(ublox::lat_deg() * 1e7);
     f.lon_1e7       = (int32_t)(ublox::lon_deg() * 1e7);
     f.gps_alt_mm    = (int32_t)(ublox::alt_m() * 1000.0f);
@@ -348,6 +361,19 @@ void task_debug()   // 2 Hz -- the low-rate GPS/SD debug lines keep their gates
         L().println();
     }
 
+    static uint32_t l_est = 0;
+    if ((now - l_est) >= 1000) {
+        l_est = now;
+        float bx, by, bz; ahrs::gyro_bias_dps(bx, by, bz);
+        L().print(F("EST,bias_ready="));   L().print(s_imu_prep.bias_ready() ? 1 : 0);
+        L().print(F(",gbias="));           L().print(bx, 2); L().print('/');
+        L().print(by, 2); L().print('/');  L().print(bz, 2);
+        L().print(F(",acc_trust="));       L().print(ahrs::acc_trust(), 2);
+        L().print(F(",agl_m="));           L().print(g_alt_agl_m, 2);
+        L().print(F(",baro_ref="));        L().print(s_baro_alt.referenced() ? 1 : 0);
+        L().println();
+    }
+
     static uint32_t l_crsf = 0;
     if ((now - l_crsf) >= 1000) {
         l_crsf = now;
@@ -406,6 +432,12 @@ void setup()
 
     s_log = &usb_stream::log();
     L().println(F("boot: BMP581 + BMI323 + uBlox + CRSF + SD (scheduled) -- MANUAL"));
+
+    // IMU preconditioning: 100 Hz sample, gentle LPF (Nyquist is 50 Hz until
+    // the FIFO/1 kHz path lands). Gyro bias calibrates on the first stationary
+    // window; keep the board still for the first few seconds after boot.
+    s_imu_prep.configure(100.0f, 30.0f, 15.0f);
+    ahrs::reset();
 
     // Servo / ESC PWM. SrvChannel defaults (1000/1500/2000) suit surfaces and,
     // via from_unipolar(), the ESCs (min 1000 = off). Per-airframe trim /

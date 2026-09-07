@@ -247,3 +247,22 @@ right", not performance prediction. The phugoid is lightly damped; the current
 (non-flight-grade) AHRS shows large pitch error under longitudinal
 acceleration (the throttle-bump climb) -- exactly the failure Phase 1 accel
 gating must fix, and now measurable in sim.
+
+**2026-09-07 — Phase 1 estimation: gated AHRS + gyro-bias cal + baro ground ref.**
+`estimation/imu_prep` -- boot-time stationary gyro-bias calibration (400-sample
+window, restarts if the board is disturbed) + a first-order LPF on gyro/accel
+(placeholder anti-alias; becomes a biquad/notch with the 1 kHz FIFO). Wired
+into `task_bmi` before the AHRS. `estimation/ahrs` rewritten as a quaternion
+gated complementary (Mahony) filter with online gyro-bias estimation: the
+accel correction is weighted by a trust factor that goes to 0 when `|accel|`
+leaves a tight 0.10 g band around 1 g OR body rate exceeds ~120 dps -- so a
+throttle surge / coordinated turn / gust no longer pulls the attitude toward
+the specific-force vector. Kp 1.0, Ki 0.05, tunable via `set_gains`. Yaw still
+unreferenced (no mag) but bias-corrected so drift is small. `estimation/baro_alt`
+-- ground-referenced AGL, ground pressure latched while disarmed (frozen on
+arm); `main_stm32` logs AGL as `alt_mm` and streams an `EST,` line
+(bias_ready, gyro bias, acc_trust, agl, baro_ref). SITL regression: max AHRS
+pitch error across the built-in maneuver INCLUDING the throttle bump dropped
+from ~13 deg (old fixed-gain filter) to ~4.6 deg; `--check` asserts < 8 deg.
+Deferred: 6-point accel calibration (needs `core/params`), UBX-NAV-PVT binary
+parser (Phase 5). Builds green all envs; 11 new native + 2 new SITL assertions.

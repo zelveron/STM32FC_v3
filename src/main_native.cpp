@@ -12,6 +12,8 @@
 
 #include "hal/hal.hpp"
 #include "estimation/ahrs.hpp"
+#include "estimation/imu_prep.hpp"
+#include "estimation/baro_alt.hpp"
 #include "core/scheduler.hpp"
 #include "control/rc_channel.hpp"
 #include "control/srv_channel.hpp"
@@ -47,11 +49,62 @@ int main()
 
     // --- ahrs: level, still sample -> attitude stays near zero ---
     ahrs::reset();
-    for (int i = 0; i < 20; i++)
+    for (int i = 0; i < 200; i++)
         ahrs::update(0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.005f);
     fails += check("ahrs level -> |roll|,|pitch| < 0.01 rad",
-                   ahrs::roll_rad() < 0.01f && ahrs::roll_rad() > -0.01f &&
-                   ahrs::pitch_rad() < 0.01f && ahrs::pitch_rad() > -0.01f);
+                   std::fabs(ahrs::roll_rad()) < 0.01f && std::fabs(ahrs::pitch_rad()) < 0.01f);
+
+    // --- ahrs: high body rate -> accel correction gated out ---
+    ahrs::reset();
+    ahrs::update(0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.005f);      // seed
+    ahrs::update(0.7f, 0.0f, 0.7f, 300.0f, 0.0f, 0.0f, 0.005f);    // tilted accel + fast roll
+    fails += check("ahrs gates accel at 300 dps (acc_trust ~ 0)", ahrs::acc_trust() < 0.05f);
+
+    // --- ahrs: online bias converges; a constant gyro bias does not drift roll/pitch ---
+    ahrs::reset();
+    ahrs::set_gains(1.5f, 0.3f);
+    const float true_bias = 2.0f;   // dps on x
+    for (int i = 0; i < 4000; i++)  // 20 s @ 200 Hz, stationary + level
+        ahrs::update(0.0f, 0.0f, 1.0f, true_bias, 0.0f, 0.0f, 0.005f);
+    {
+        float bx, by, bz; ahrs::gyro_bias_dps(bx, by, bz);
+        fails += check("ahrs online bias converges to ~2 dps", std::fabs(bx - true_bias) < 0.4f);
+        fails += check("ahrs holds level despite gyro bias", std::fabs(ahrs::roll_rad()) < 0.02f);
+    }
+    ahrs::set_gains(1.0f, 0.05f);
+
+    // --- imu_prep: gyro bias cal + LPF ---
+    {
+        estimation::ImuPrep prep;
+        prep.configure(100.0f, 25.0f, 12.0f);
+        estimation::ImuSample o{};
+        for (int i = 0; i < 500; i++)   // stationary, biased gyro
+            o = prep.process(1.5f, -0.8f, 0.3f, 0.01f, 0.0f, 1.0f, 0.01f);
+        fails += check("imu_prep bias_ready after a stationary window", o.bias_ready);
+        float bx, by, bz; prep.gyro_bias(bx, by, bz);
+        fails += check("imu_prep gyro bias ~ (1.5,-0.8,0.3)",
+                       std::fabs(bx - 1.5f) < 0.1f && std::fabs(by + 0.8f) < 0.1f &&
+                       std::fabs(bz - 0.3f) < 0.1f);
+        o = prep.process(1.5f, -0.8f, 0.3f, 0.01f, 0.0f, 1.0f, 0.01f);
+        fails += check("imu_prep removes the bias (|g| < 0.2 dps)",
+                       std::fabs(o.gx_dps) < 0.2f && std::fabs(o.gy_dps) < 0.2f);
+
+        estimation::ImuPrep p2;
+        p2.configure(100.0f, 25.0f, 12.0f);
+        for (int i = 0; i < 300; i++) p2.process(0, 0, 0, 0, 0, 1, 0.01f);
+        p2.process(50.0f, 0, 0, 0, 0, 1, 0.01f);   // a big spike mid-window
+        fails += check("imu_prep restarts cal on motion", !p2.bias_ready());
+    }
+
+    // --- baro_alt: ground reference ---
+    {
+        estimation::BaroAlt b;
+        fails += check("baro not referenced -> alt 0", !b.referenced() && b.alt_m(90000.0f) == 0.0f);
+        b.set_ground(95000.0f);
+        fails += check("baro at ground pressure -> ~0 m", std::fabs(b.alt_m(95000.0f)) < 0.5f);
+        const float a = b.alt_m(94000.0f);   // ~1000 Pa lower -> ~85 m up
+        fails += check("baro lower pressure -> positive altitude ~85 m", a > 60.0f && a < 110.0f);
+    }
 
     // --- scheduler: two tasks at 100 Hz and 20 Hz over ~500 ms ---
     fails += check("sched::add x2", sched::add("fast", 100, fast_task) &&

@@ -240,7 +240,7 @@ src/
   drivers/          bmi323, bmp581, ublox [exist]; crsf, esc_out — depend on hal only
   core/             scheduler, failsafe, arming, log_ring, log_frame [exist];
                     params [none yet]; usb_stream, sd_bin_log [exist, BENCH — rule 1 exception]
-  estimation/       ahrs [exists]; ins, baro_alt, nav_filter
+  estimation/       ahrs (gated Mahony), imu_prep, baro_alt [exist]; ins, nav_filter
   control/          rc_channel, srv_channel, mixer [exist]; pid, rate_ctrl, attitude_ctrl, tecs, nav_l1
   modes/            mode.hpp + mode_manual [exist]; mode_assist, mode_auto
   sitl/             aircraft (6DOF), sensors [exist]; + main_sitl.cpp

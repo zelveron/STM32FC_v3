@@ -98,6 +98,7 @@ int main(int argc, char** argv)
     double trim_roll_max = 0, trim_pitch_max = 0, trim_V_err = 0;
     double roll_doublet_peak = 0;   // max roll during t in [2.0, 2.8]
     double end_roll = 0, end_pitch = 0, end_V = 0;
+    double ahrs_roll_err_max = 0, ahrs_pitch_err_max = 0;
 
     size_t si = 0;
     for (double t = 0.0; t < secs; t += dt) {
@@ -149,6 +150,12 @@ int main(int argc, char** argv)
             }
             if (t >= 2.0 && t < 2.8 && rd > roll_doublet_peak) roll_doublet_peak = rd;
             end_roll = rd; end_pitch = pd; end_V = ac.airspeed_mps();
+            if (t > 0.5) {   // let the filter settle
+                const double er = std::fabs(ahrs::roll_rad()  * kRad2Deg - rd);
+                const double ep = std::fabs(ahrs::pitch_rad() * kRad2Deg - pd);
+                if (er > ahrs_roll_err_max)  ahrs_roll_err_max  = er;
+                if (ep > ahrs_pitch_err_max) ahrs_pitch_err_max = ep;
+            }
             continue;
         }
 
@@ -177,6 +184,10 @@ int main(int argc, char** argv)
         ck("no departure: |roll_end|<30",                      std::fabs(end_roll)  < 30.0);
         ck("no departure: |pitch_end|<30",                     std::fabs(end_pitch) < 30.0);
         ck("no departure: airspeed_end in [10,30]",            end_V > 10.0 && end_V < 30.0);
+        std::fprintf(stderr, "ahrs err max: roll %.1f deg, pitch %.1f deg\n",
+                     ahrs_roll_err_max, ahrs_pitch_err_max);
+        ck("gated AHRS: max roll error < 8 deg (incl. throttle bump)",  ahrs_roll_err_max  < 8.0);
+        ck("gated AHRS: max pitch error < 8 deg (incl. throttle bump)", ahrs_pitch_err_max < 8.0);
         std::printf(fails ? "\nRESULT: %d FAIL\n" : "\nRESULT: all pass\n", fails);
         return fails;
     }
