@@ -137,12 +137,20 @@ Status i2c_write_read(I2cBus bus, uint8_t addr7,
 }
 
 // ---------------------------------------------------------------------------
-// UART -- GPS on USART1 (crossed wiring: MCU TX = PA9, MCU RX = PA10).
-// CRSF (USART2) has no caller yet.
+// UART
+//   GPS  -- USART1, crossed wiring: MCU TX = PA9, MCU RX = PA10.
+//   CRSF -- USART3: MCU RX = PB11 (<- RX TX), MCU TX = PB10 (-> RX RX). Pins
+//           are bound by the s_crsf constructor. TODO: DMA circular RX + IDLE.
 // ---------------------------------------------------------------------------
+static HardwareSerial s_crsf(PB11, PB10);   // (rx, tx) -> selects USART3
+
 static HardwareSerial* port_for(Uart u)
 {
-    return (u == Uart::gps) ? &Serial1 : nullptr;
+    switch (u) {
+        case Uart::gps:  return &Serial1;
+        case Uart::crsf: return &s_crsf;
+    }
+    return nullptr;
 }
 
 Status uart_config(Uart u, uint32_t baud)
@@ -150,8 +158,7 @@ Status uart_config(Uart u, uint32_t baud)
     HardwareSerial* p = port_for(u);
     if (!p) return Status::unsupported;
     p->end();
-    p->setTx(PA9);
-    p->setRx(PA10);
+    if (u == Uart::gps) { p->setTx(PA9); p->setRx(PA10); }  // crsf pins fixed by ctor
     p->begin(baud);
     return Status::ok;
 }

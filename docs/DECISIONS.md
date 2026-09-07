@@ -143,3 +143,16 @@ removed; `hal::gpio_*` kept only for CS. SPI clock: 8 MHz request -> ~5.25 MHz
 actual (SPI1 APB2/16), inside the 10 MHz datasheet limit. `spi_xfer_async`
 (DMA) still returns unsupported -- next optimisation, with a raw-sample spike
 filter. Build green on both envs; hardware-flash verification pending.
+
+**2026-09-07 — CRSF on USART3 (PB10/PB11).** The ER8 (ExpressLRS) receiver is
+wired to USART3: PB11 <- RX TX, PB10 -> RX RX, 420000 8N1 not inverted. That is
+CLAUDE.md's documented CRSF *fallback* port (USART2 PA2/PA3 is the primary, but
+PB10/PB11 were free once the enable-pin GPIO was removed, and that is where the
+user soldered). `hal::Uart::crsf` now maps to a dedicated `HardwareSerial(PB11,
+PB10)` instance (selects USART3 from the pins); `uart_config` only forces
+setTx/setRx for the GPS. New `drivers/crsf`: non-blocking byte state-machine
+parser (sync 0xC8, CRC-8/DVB-S2 poly 0xD5 over type+payload, resync on bad
+length/CRC), decodes RC_CHANNELS_PACKED (0x16 -> 16x 11-bit -> us via
+(raw-992)*5/8+1500) and LINK_STATISTICS (0x14), counts frames/crc_err/resync.
+Verified via `[env:crsf_probe]` streaming RC/LINK/CRSF_STAT over USB. Real
+driver adds DMA circular RX + UART IDLE IRQ and telemetry TX later.
