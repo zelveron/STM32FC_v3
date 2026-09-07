@@ -38,9 +38,24 @@ constexpr float    kRadToDeg    = 57.2957795130823f;
 // --- CRSF channel assignment (AETR; index 0-based). Set kArmCh to whichever
 //     switch you map on the TX16S. ---
 constexpr int      kRollCh  = 0, kPitchCh = 1, kThrCh = 2, kYawCh = 3;
-constexpr int      kArmCh   = 4;      // ch5
+constexpr int      kArmCh   = 4;      // ch5: 2-pos arm switch
+constexpr int      kModeCh  = 6;      // ch7: 3-pos mode select (low/mid/high)
 constexpr uint16_t kArmHi   = 1700;  // arm switch "on" threshold, us
 constexpr uint32_t kServoHz = 333;
+
+// ch7 -> requested mode. Only MANUAL is implemented; a mid/high request is
+// reported but the aircraft stays in MANUAL.
+inline modes::Id mode_from_ch(uint16_t us)
+{
+    if (us < 1333) return modes::Id::manual;
+    if (us < 1667) return modes::Id::assist;
+    return modes::Id::auto_;
+}
+inline const char* mode_name(modes::Id id)
+{
+    return (id == modes::Id::manual) ? "MANUAL"
+         : (id == modes::Id::assist) ? "ASSIST" : "AUTO";
+}
 
 // Latest sensor values, mirrored for the SD row (as in the old g_* globals).
 float g_ax = 0, g_ay = 0, g_az = 0, g_gx = 0, g_gy = 0, g_gz = 0;
@@ -61,6 +76,7 @@ core::Failsafe      s_failsafe;
 core::Arming        s_arming;
 control::Outputs    s_out;                             // last outputs (bumpless)
 uint16_t            s_out_us[8] = { 0,0,0,0,0,0,0,0 }; // last pulses, for OUT,
+modes::Id           s_mode_req  = modes::Id::manual;   // requested via ch7
 
 // ---------------------------------------------------------------------------
 // Scheduler tasks (one per old loop() block; timing gates are now the
@@ -134,6 +150,7 @@ void task_control()   // 400 Hz -- CRSF -> arming/failsafe -> mode -> mixer -> P
     sticks.throttle = s_rc_thr.unipolar(ch.us[kThrCh]);
 
     s_failsafe.update(crsf::receiving(), millis());
+    s_mode_req = mode_from_ch(ch.us[kModeCh]);   // only MANUAL is acted on for now
 
     core::ArmInputs ai;
     ai.arm_switch      = ch.us[kArmCh] > kArmHi;
@@ -309,9 +326,10 @@ void task_debug()   // 2 Hz -- the low-rate GPS/SD debug lines keep their gates
     static uint32_t l_mode = 0;
     if ((now - l_mode) >= 500) {
         l_mode = now;
-        L().print(F("MODE,"));                   L().print(s_mode_manual.name());
-        L().print(F(",armed="));                 L().print(s_arming.armed() ? 1 : 0);
-        L().print(F(",failsafe="));              L().print((int)s_failsafe.level());
+        L().print(F("MODE,active="));  L().print(s_mode_manual.name());
+        L().print(F(",req="));         L().print(mode_name(s_mode_req));
+        L().print(F(",armed="));       L().print(s_arming.armed() ? 1 : 0);
+        L().print(F(",failsafe="));    L().print((int)s_failsafe.level());
         L().println();
     }
 }
