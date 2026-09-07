@@ -16,6 +16,9 @@
 #include "control/rc_channel.hpp"
 #include "control/srv_channel.hpp"
 #include "control/mixer.hpp"
+#include "core/failsafe.hpp"
+#include "core/arming.hpp"
+#include "modes/mode_manual.hpp"
 
 namespace {
 
@@ -102,6 +105,49 @@ int main()
         fails += check("mix: elevator L==R, ESC L==R==throttle",
                        o.ch[2] == -0.5f && o.ch[3] == -0.5f &&
                        o.ch[6] == 0.6f && o.ch[7] == 0.6f);
+    }
+
+    // --- failsafe (debounced both ways; starts engaged) ---
+    {
+        core::Failsafe fs;
+        fails += check("fs starts engaged (rc_loss)", fs.active());
+        fs.update(true, 100);
+        fails += check("fs: link up but not yet stable -> still engaged", fs.active());
+        fs.update(true, 500);   // 400 ms stable >= 300 recover
+        fails += check("fs: clears after recover window", !fs.active());
+        fs.update(false, 600);
+        fails += check("fs: link drop, not yet -> still clear", !fs.active());
+        fs.update(false, 900);  // 300 ms lost >= 200 engage
+        fails += check("fs: re-engages after engage window", fs.active());
+    }
+
+    // --- arming ---
+    {
+        core::Arming a;
+        a.update({ false, 0.0f, false });
+        fails += check("arm: disarmed by default", !a.armed());
+        a.update({ true, 0.0f, false });                 // rising edge, idle, no fs
+        fails += check("arm: arms on rising edge + idle throttle", a.armed());
+        a.update({ true, 0.8f, false });
+        fails += check("arm: stays armed with throttle up", a.armed());
+        a.update({ false, 0.0f, false });
+        fails += check("arm: disarms on switch low", !a.armed());
+        core::Arming b;
+        b.update({ true, 0.8f, false });
+        fails += check("arm: will not arm with throttle up", !b.armed());
+        core::Arming c;
+        c.update({ true, 0.0f, true });
+        fails += check("arm: will not arm during failsafe", !c.armed());
+    }
+
+    // --- mode_manual = passthrough via the mixer ---
+    {
+        modes::ModeManual m;
+        control::Outputs o;
+        m.update({ 0.4f, 0.0f, 0.0f, 0.3f }, 0.0025f, o);
+        fails += check("mode_manual: roll -> ailerons, throttle -> ESCs",
+                       o.ch[0] == 0.4f && o.ch[1] == 0.4f &&
+                       o.ch[6] == 0.3f && o.ch[7] == 0.3f);
     }
 
     std::printf(fails ? "\nRESULT: %d FAIL\n" : "\nRESULT: all pass\n", fails);

@@ -194,3 +194,22 @@ scheduler table: "100 Hz | CRSF parse"). It streams `RC,<16 us>` at 20 Hz and
 100 Hz poll buffers ~100 B between calls and the core's 64 B RX ring would
 overflow. The proper fix is DMA circular RX + UART IDLE IRQ ("come back to A").
 Nothing consumes the channels yet -- RC_Channel / mixer / mode_manual are next.
+
+**2026-09-07 — MANUAL mode + the control chain.** Built as: hal PWM
+(TIM4 PD12-15 / TIM1 PE9/11/13/14, HardwareTimer, 333 Hz, us-direct);
+`control/rc_channel` (us -> normalized, deadzone + reverse), `control/srv_channel`
+(normalized -> us -- the only place that happens -- + safe_us for
+disarmed/failsafe), `control/mixer::mix_manual` (stick passthrough to the
+8-output map; both ailerons/elevators get the same signed value, L/R
+opposition is the SrvChannel reverse flag; diff-aileron / diff-thrust
+scaffolded at 0); `core/failsafe` (RC-loss only for now, debounced 200 ms
+engage / 300 ms recover, starts engaged); `core/arming` (rising-edge arm
+switch + throttle <= 5% + no failsafe; disarm on switch-low or failsafe;
+disarmed forces ESC outputs to min); `modes/mode.hpp` + `modes/mode_manual`.
+`main_stm32` runs `task_control` at 400 Hz: CRSF channels (AETR: roll ch0,
+pitch ch1, throttle ch2, yaw ch3; arm switch ch4 > 1700 us) -> RcChannel ->
+Sticks -> failsafe/arming -> mode.update -> SrvChannel -> hal::pwm_write_us,
+and streams `OUT,<8 us>` (20 Hz) + `MODE,<name>,armed=,failsafe=` (2 Hz).
+34 native assertions pass. Servos not wired yet -- verified via the `OUT,`
+stream responding to sticks; servo/scope check comes when the airframe is
+wired. IWDG still off. Sign conventions stated in mixer.hpp.

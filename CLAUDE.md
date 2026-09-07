@@ -238,11 +238,11 @@ src/
     stm32/          real hardware (may call HAL_*/LL_* directly)    [exists]
     native/         desktop backend for tests and SITL             [exists]
   drivers/          bmi323, bmp581, ublox [exist]; crsf, esc_out — depend on hal only
-  core/             scheduler [exists]; params, logger, failsafe [none yet];
+  core/             scheduler, failsafe, arming [exist]; params, logger [none yet];
                     usb_stream, sd_csv_log [exist, BENCH — see rule 1 exception]
   estimation/       ahrs [exists]; ins, baro_alt, nav_filter
-  control/          pid, rate_ctrl, attitude_ctrl, tecs, nav_l1, mixer
-  modes/            mode.hpp + mode_manual, mode_assist, mode_auto
+  control/          rc_channel, srv_channel, mixer [exist]; pid, rate_ctrl, attitude_ctrl, tecs, nav_l1
+  modes/            mode.hpp + mode_manual [exist]; mode_assist, mode_auto
   sitl/             6DOF model + native main
   main_stm32.cpp    application entry (setup/loop)                  [exists]
   main_native.cpp   [env:native] entry                             [exists]
