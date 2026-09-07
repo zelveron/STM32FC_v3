@@ -243,7 +243,7 @@ src/
   estimation/       ahrs [exists]; ins, baro_alt, nav_filter
   control/          rc_channel, srv_channel, mixer [exist]; pid, rate_ctrl, attitude_ctrl, tecs, nav_l1
   modes/            mode.hpp + mode_manual [exist]; mode_assist, mode_auto
-  sitl/             6DOF model + native main
+  sitl/             aircraft (6DOF), sensors [exist]; + main_sitl.cpp
   main_stm32.cpp    application entry (setup/loop)                  [exists]
   main_native.cpp   [env:native] entry                             [exists]
 lib/                vendored: bmi323, bmp5, STM32SD, FatFs  (see README)
@@ -256,11 +256,15 @@ We stay on **PlatformIO + Arduino framework** for now. The STM32 Arduino core is
 built on STM32Cube HAL, so timing-critical drivers can call `HAL_*` / `LL_*`
 directly without abandoning the working SD stack.
 
-Two build envs (`platformio.ini`):
+Build envs (`platformio.ini`):
 - `black_f407ve` — the firmware. Excludes `main_native.cpp`, `hal/native/`.
 - `native` — portable layers only (`hal.hpp` + `drivers/` + `estimation/` +
   `hal/native/` + `main_native.cpp`). Proves those layers stay Arduino-free.
-  Excludes `main_stm32.cpp`, `hal/stm32/`, `core/`.
+  Excludes `main_stm32.cpp`, `hal/stm32/`, the bench `core/*` files.
+- `sitl` — desktop 6DOF simulator: stick input through the real control chain
+  (`control/` + `modes/`) into `sitl/`, then the AHRS; CSV state to stdout.
+  `--check` self-tests trim + control signs + no-departure.
+- `crsf_probe`, `imu_probe` — diagnostic firmwares (not flight).
 
 ---
 

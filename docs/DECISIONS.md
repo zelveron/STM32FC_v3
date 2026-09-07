@@ -229,3 +229,21 @@ the CSV logger inside a 50 Hz task). `tools/parse_bin_log.py` decodes to CSV.
 `sd_csv_log.{hpp,cpp}` deleted (recoverable from git). RAM +8 KB for the ring.
 The remaining ~1-3 ms/sector SD write latency goes to zero with DMA SDIO
 (`hal::blk_write` async) + 4-bit mode -- a later item.
+
+**2026-09-07 — SITL harness (`[env:sitl]`).** Desktop 6DOF simulator, per
+CLAUDE.md Phase 3 pulled forward (servos are deferred, so SITL is how
+control logic gets verified). `sitl/aircraft` -- rigid body + linear aero
+(lift/drag/side + roll/pitch/yaw moments with control + rate-damping terms),
+sub-stepped Euler, quaternion attitude, numeric trim solve in reset().
+`sitl/sensors` -- synthesizes IMU/baro/GPS in the real driver conventions
+(level -> az=+1 g, nose-up -> ax negative). `main_sitl` runs stick input
+(built-in doublet maneuver or a t,roll,pitch,yaw,thr CSV script) through the
+ACTUAL `control::RcChannel` -> `modes::ModeManual` -> `control::mixer` chain
+into the model, then `ahrs::update`, and prints a state CSV. `--check` asserts
+trim stability, aileron-right->roll-right sign, and no departure (7 checks,
+pass). CAVEATS: aero coefficients are rough order-of-magnitude for a ~1.5 m
+twin-EDF, NOT airframe-validated -- this is for "does the control logic behave
+right", not performance prediction. The phugoid is lightly damped; the current
+(non-flight-grade) AHRS shows large pitch error under longitudinal
+acceleration (the throttle-bump climb) -- exactly the failure Phase 1 accel
+gating must fix, and now measurable in sim.
