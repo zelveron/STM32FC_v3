@@ -68,5 +68,15 @@ void loop()
         L->print(F(",resync="));             L->print(crsf::resyncs());
         L->print(F(",bytes_rx="));           L->print(crsf::bytes_rx());
         L->println();
+
+        uint8_t raw[32];
+        const size_t rn = crsf::raw_sample(raw, sizeof(raw));
+        L->print(F("RAW,"));
+        for (size_t i = 0; i < rn; i++) {
+            if (raw[i] < 0x10) L->print('0');
+            L->print(raw[i], HEX);
+            L->print(' ');
+        }
+        L->println();
     }
 }

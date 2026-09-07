@@ -30,6 +30,11 @@ uint32_t s_resync    = 0;
 uint32_t s_bytes     = 0;
 uint32_t s_last_ok_ms = 0;
 
+// diagnostic ring of the most recent raw bytes
+uint8_t  s_raw[32];
+uint8_t  s_raw_head = 0;   // next write index
+uint8_t  s_raw_fill = 0;
+
 uint8_t crc8_dvbs2(const uint8_t* p, uint8_t n)
 {
     uint8_t crc = 0;
@@ -116,6 +121,10 @@ uint8_t poll()
         for (size_t i = 0; i < n; i++) {
             const uint8_t c = in[i];
 
+            s_raw[s_raw_head] = c;
+            s_raw_head = (uint8_t)((s_raw_head + 1) % sizeof(s_raw));
+            if (s_raw_fill < sizeof(s_raw)) s_raw_fill++;
+
             if (s_len == 0) {                         // hunting for sync
                 if (c == kAddrFC) { s_buf[0] = c; s_len = 1; }
                 continue;
@@ -152,5 +161,17 @@ uint32_t frames_ok()   { return s_frames_ok; }
 uint32_t crc_errors()  { return s_crc_err; }
 uint32_t resyncs()     { return s_resync; }
 uint32_t bytes_rx()    { return s_bytes; }
+
+size_t raw_sample(uint8_t* out, size_t max)
+{
+    const size_t n = (s_raw_fill < max) ? s_raw_fill : max;
+    // oldest-first: start (s_raw_head - s_raw_fill) mod size
+    uint8_t idx = (uint8_t)((s_raw_head + sizeof(s_raw) - s_raw_fill) % sizeof(s_raw));
+    for (size_t i = 0; i < n; i++) {
+        out[i] = s_raw[idx];
+        idx = (uint8_t)((idx + 1) % sizeof(s_raw));
+    }
+    return n;
+}
 
 } // namespace crsf

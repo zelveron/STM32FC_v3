@@ -11,6 +11,7 @@
 //
 // TODO: telemetry TX (battery / GPS / attitude uplink); DMA circular RX.
 //
+#include <cstddef>
 #include <cstdint>
 
 namespace crsf {
@@ -52,5 +53,8 @@ uint32_t frames_ok();
 uint32_t crc_errors();
 uint32_t resyncs();
 uint32_t bytes_rx();
+
+// --- diagnostic: copy of the most recent raw RX bytes (up to 32) ---
+size_t   raw_sample(uint8_t* out, size_t max);
 
 } // namespace crsf
