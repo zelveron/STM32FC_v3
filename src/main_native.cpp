@@ -19,6 +19,9 @@
 #include "control/srv_channel.hpp"
 #include "control/mixer.hpp"
 #include "control/surface_test.hpp"
+#include "control/pid.hpp"
+#include "control/rate_ctrl.hpp"
+#include "control/attitude_ctrl.hpp"
 #include "core/failsafe.hpp"
 #include "core/arming.hpp"
 #include "core/log_ring.hpp"
@@ -223,6 +226,87 @@ int main()
         fails += check("surface_test: elevator reaches +/-1", pmax > 0.95f && pmin < -0.95f);
         fails += check("surface_test: rudder reaches +/-1",   ymax > 0.95f && ymin < -0.95f);
         fails += check("surface_test finishes and returns to inactive", !st.active());
+    }
+
+    // --- PID ---
+    {
+        using control::Pid; using control::PidGains;
+
+        // pure P, wide clamp
+        Pid p; PidGains g; g.kp = 2.0f; g.out_min = -100; g.out_max = 100;
+        p.configure(g, 400.0f);
+        fails += check("pid P: err 1 * kp 2 -> 2", std::fabs(p.update(1.0f, 0.0f, 0.0025f) - 2.0f) < 1e-4f);
+
+        // FF on setpoint (no error)
+        Pid f; PidGains gf; gf.kff = 0.5f; gf.out_min = -100; gf.out_max = 100;
+        f.configure(gf, 400.0f);
+        fails += check("pid FF: kff 0.5 * sp 3 -> 1.5", std::fabs(f.update(3.0f, 3.0f, 0.0025f) - 1.5f) < 1e-4f);
+
+        // I accumulates then clamps at i_max
+        Pid pi; PidGains gi; gi.ki = 10.0f; gi.i_max = 0.5f; gi.out_min = -100; gi.out_max = 100;
+        pi.configure(gi, 400.0f);
+        for (int i = 0; i < 400; i++) pi.update(1.0f, 0.0f, 0.0025f);
+        fails += check("pid I clamps at i_max", std::fabs(pi.i_term() - 0.5f) < 1e-3f);
+
+        // D on measurement: a setpoint step must NOT spike D; a measurement step must
+        Pid pd; PidGains gd; gd.kd = 1.0f; gd.d_lpf_hz = 0.0f; gd.out_min = -100; gd.out_max = 100;
+        pd.configure(gd, 400.0f);
+        pd.update(0.0f, 0.0f, 0.0025f);                 // prime
+        pd.update(5.0f, 0.0f, 0.0025f);                 // setpoint step
+        fails += check("pid D ignores setpoint step", std::fabs(pd.d_term()) < 1e-4f);
+        pd.update(5.0f, 1.0f, 0.0025f);                 // measurement +1 in one tick
+        fails += check("pid D opposes measurement rise (D < 0)", pd.d_term() < -100.0f);
+
+        // anti-windup: saturate hard, I must stop growing; recover when error flips
+        Pid pw; PidGains gw; gw.kp = 1.0f; gw.ki = 50.0f; gw.i_max = 1000.0f;
+        gw.out_min = -1.0f; gw.out_max = 1.0f;
+        pw.configure(gw, 400.0f);
+        for (int i = 0; i < 800; i++) pw.update(10.0f, 0.0f, 0.0025f);   // pegged high
+        const float i_wound = pw.i_term();
+        for (int i = 0; i < 40; i++) pw.update(10.0f, 0.0f, 0.0025f);
+        fails += check("pid anti-windup: I frozen at the rail", std::fabs(pw.i_term() - i_wound) < 1e-3f);
+        const float recov = pw.update(-10.0f, 0.0f, 0.0025f);           // error flips
+        fails += check("pid anti-windup: output responds immediately on flip", recov < 0.5f);
+
+        // bumpless: preset so the next update reproduces a target output
+        Pid pb; PidGains gb; gb.kp = 3.0f; gb.ki = 2.0f; gb.i_max = 5.0f; gb.out_min = -5; gb.out_max = 5;
+        pb.configure(gb, 100.0f);
+        pb.preset_integrator(0.2f, 0.1f, 0.42f);
+        fails += check("pid preset_integrator -> bumpless first output",
+                       std::fabs(pb.update(0.2f, 0.1f, 0.01f) - 0.42f) < 0.05f);
+    }
+
+    // --- rate controller ---
+    {
+        control::RateController rc;
+        control::RateCtrlConfig cfg;
+        cfg.roll.kff = 0.01f;  cfg.roll.out_min = -1;  cfg.roll.out_max = 1;
+        cfg.pitch = cfg.yaw = cfg.roll;
+        rc.configure(cfg);
+        float r, p, y;
+        rc.update(50.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0025f, r, p, y);
+        fails += check("rate_ctrl: FF 0.01 * 50 dps demand -> roll out 0.5", std::fabs(r - 0.5f) < 1e-3f);
+        fails += check("rate_ctrl: other axes zero", p == 0.0f && y == 0.0f);
+        rc.preset(0, 0, 0, 0, 0, 0, 0.3f, -0.2f, 0.0f);
+        rc.update(0, 0, 0, 0, 0, 0, 0.0025f, r, p, y);
+        fails += check("rate_ctrl preset -> bumpless (roll ~0.3, pitch ~-0.2)",
+                       std::fabs(r - 0.3f) < 0.05f && std::fabs(p + 0.2f) < 0.05f);
+    }
+
+    // --- attitude controller ---
+    {
+        control::AttitudeController ac;
+        control::AttitudeCtrlConfig c;   // defaults
+        ac.configure(c);
+        float dp, dq;
+        ac.update(0.3f, 0.0f, 0.0f, 0.0f, 0.0f, dp, dq);   // want +0.3 rad roll, no airspeed
+        fails += check("att_ctrl: roll error -> positive roll-rate demand, clamped",
+                       dp > 0.0f && dp <= c.max_roll_rate_dps + 1e-3f);
+        ac.update(0.0f, 0.0f, 0.0f, 0.0f, 0.0f, dp, dq);
+        fails += check("att_ctrl: no error -> zero rate demand", std::fabs(dp) < 1e-4f && std::fabs(dq) < 1e-4f);
+        // turn compensation: banked 30 deg at 18 m/s -> nose-up (positive q) FF
+        ac.update(0.52f, 0.0f, 0.52f, 0.0f, 18.0f, dp, dq);
+        fails += check("att_ctrl: banked -> turn-comp adds nose-up (dq > 0)", dq > 1.0f);
     }
 
     // --- mode_manual = passthrough via the mixer ---
