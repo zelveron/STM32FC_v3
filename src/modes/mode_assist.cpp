@@ -18,6 +18,7 @@ void ModeAssist::enter(const control::Outputs& current)
 {
     _entry_out   = current;
     _need_preset = true;    // rate integrators preloaded on the first update()
+    _prev_allow  = true;    // enter()'s preset covers the initial state
 }
 
 void ModeAssist::update(const ModeInput& in, control::Outputs& out)
@@ -31,6 +32,13 @@ void ModeAssist::update(const ModeInput& in, control::Outputs& out)
     _att.update(tgt_roll, tgt_pitch, in.roll_rad, in.pitch_rad,
                 in.airspeed_mps, des_p, des_q);
     const float des_r = in.sticks.yaw * _max_yaw_rate;
+
+    // Ground / not-flying: freeze the rate-loop integrators. On the transition
+    // back to enabled (e.g. arming), re-preset from the current outputs so
+    // integration restarts bumplessly from a clean state instead of a wound rail.
+    _rate.set_integrator_enabled(in.allow_integrators);
+    if (in.allow_integrators && !_prev_allow) _need_preset = true;
+    _prev_allow = in.allow_integrators;
 
     // bumpless: preload the rate integrators so the first output == entry pos
     if (_need_preset) {

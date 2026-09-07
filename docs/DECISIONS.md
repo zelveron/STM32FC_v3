@@ -329,3 +329,23 @@ on the incoming mode for bumpless hand-off and emits `MODE_CHANGE,<name>`.
 (`g_g*`), and an airspeed proxy = GPS ground speed floored at 10 m/s (no
 pitot; unreliable in wind). Log frame `mode` is now `s_mode_cur`. MANUAL and
 `core/failsafe` paths untouched.
+
+**2026-09-07 — ASSIST stabilizer integrators gated on a "flying" latch.**
+Bench observation: board level and still, sticks centred, armed, in ASSIST --
+the aileron output sat ~215 us off centre (1285 vs 1500). Cause is textbook
+integrator windup against a stuck plant: a ~1 deg static AHRS roll (table not
+level + accel zero bias) makes the angle loop demand a small constant body
+rate; the airframe is clamped to the table so the rate error never clears and
+the rate-loop I term winds to +/-i_max (0.4). Harmless in flight (the aircraft
+rolls, the error clears) but a real off-centre surface at launch. Fix:
+`Pid::set_integrator_enabled(bool)` (I still contributes to the output, just
+stops accumulating) fanned out through `RateController` and driven from a new
+`ModeInput::allow_integrators`. `main_stm32` sets it from an `s_flying` latch:
+false until `armed && (throttle > 0.25 || GPS ground speed > 3 m/s)`, then held
+true until disarm. On the false->true edge `ModeAssist` re-presets the
+integrators so they resume bumplessly from a clean state, not a wound rail.
+MANUAL ignores the flag. `MODE` line gains `flying=`; GUI shows "Stab
+integrators: frozen/active". 2 new native assertions; SITL `--assist-check`
+unchanged (sim always flying). NOTE: the residual ~1 deg roll with I frozen is
+an accel-cal / mounting error, not a control bug -- 6-point accel calibration
+is still deferred (needs `core/params`).

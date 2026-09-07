@@ -249,6 +249,16 @@ int main()
         for (int i = 0; i < 400; i++) pi.update(1.0f, 0.0f, 0.0025f);
         fails += check("pid I clamps at i_max", std::fabs(pi.i_term() - 0.5f) < 1e-3f);
 
+        // integrator freeze: disabled -> I does not accumulate; re-enable -> resumes
+        Pid pf; PidGains gf2; gf2.ki = 10.0f; gf2.i_max = 5.0f; gf2.out_min = -100; gf2.out_max = 100;
+        pf.configure(gf2, 400.0f);
+        pf.set_integrator_enabled(false);
+        for (int i = 0; i < 400; i++) pf.update(1.0f, 0.0f, 0.0025f);
+        fails += check("pid I frozen when disabled", std::fabs(pf.i_term()) < 1e-6f);
+        pf.set_integrator_enabled(true);
+        for (int i = 0; i < 40; i++) pf.update(1.0f, 0.0f, 0.0025f);
+        fails += check("pid I resumes when re-enabled", pf.i_term() > 0.5f);
+
         // D on measurement: a setpoint step must NOT spike D; a measurement step must
         Pid pd; PidGains gd; gd.kd = 1.0f; gd.d_lpf_hz = 0.0f; gd.out_min = -100; gd.out_max = 100;
         pd.configure(gd, 400.0f);

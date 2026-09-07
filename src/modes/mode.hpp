@@ -24,6 +24,11 @@ struct ModeInput {
     float roll_rad = 0.0f, pitch_rad = 0.0f, yaw_rad = 0.0f;
     float gyro_p_dps = 0.0f, gyro_q_dps = 0.0f, gyro_r_dps = 0.0f;
     float airspeed_mps = 0.0f;       // <= 0 -> unknown (turn comp skipped)
+
+    // false -> stabilizer integrators frozen (aircraft on the ground: a steady
+    // attitude error would otherwise wind the rate-loop I term to its rail).
+    // MANUAL ignores it.
+    bool  allow_integrators = true;
 };
 
 class Mode {

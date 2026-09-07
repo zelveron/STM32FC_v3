@@ -44,6 +44,7 @@ private:
     float _max_roll = 0.7f, _max_pitch = 0.5f, _max_yaw_rate = 90.0f;
 
     bool             _need_preset = false;
+    bool             _prev_allow  = true;   // edge-detect integrator re-enable
     control::Outputs _entry_out{};
 };
 

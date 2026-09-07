@@ -87,6 +87,7 @@ modes::ModeAssist   s_mode_assist;
 modes::Mode*        s_mode_active = &s_mode_manual;    // current mode object
 modes::Id           s_mode_cur    = modes::Id::manual; // its id, for the log frame
 bool               s_assist_lockout = false;          // latched: IMU faulted in ASSIST
+bool               s_flying         = false;          // latched: armed + spooled/rolling
 control::SurfaceTest s_surface_test;                   // gyro-cal-done surface sweep
 core::Failsafe      s_failsafe;
 core::Arming        s_arming;
@@ -206,6 +207,18 @@ void task_control()   // 400 Hz -- CRSF -> arming/failsafe -> mode -> mixer -> P
     ai.failsafe_active = s_failsafe.active();
     s_arming.update(ai);
 
+    const bool armed = s_arming.armed();
+
+    // "flying" latch: set once armed AND (throttle clearly applied OR moving),
+    // held until disarm. Gates the stabilizer integrators so they never wind
+    // against a stationary airframe (armed on the bench = frozen; the moment
+    // you spool up or roll, they arm and re-preset bumplessly).
+    if (!armed) {
+        s_flying = false;
+    } else if (sticks.throttle > 0.25f || (ublox::speed_kmh() * (1.0f / 3.6f)) > 3.0f) {
+        s_flying = true;
+    }
+
     // --- mode manager: resolve request -> permitted mode, switch bumplessly ---
     set_mode(resolve_mode(s_mode_req, s_bmi_ready, s_imu_prep.bias_ready(),
                           s_failsafe.active()));
@@ -220,9 +233,8 @@ void task_control()   // 400 Hz -- CRSF -> arming/failsafe -> mode -> mixer -> P
     mi.gyro_q_dps   = g_gy;
     mi.gyro_r_dps   = g_gz;
     mi.airspeed_mps = fmaxf(ublox::speed_kmh() / 3.6f, kAirspeedFloorMps);
+    mi.allow_integrators = s_flying;
     s_mode_active->update(mi, s_out);
-
-    const bool armed = s_arming.armed();
 
     // "gyro-bias cal complete" signal: on the rising edge of bias_ready, while
     // disarmed, sweep aileron -> elevator -> rudder once so the pilot sees it.
@@ -464,6 +476,7 @@ void task_debug()   // 2 Hz -- the low-rate GPS/SD debug lines keep their gates
         L().print(F(",armed="));       L().print(s_arming.armed() ? 1 : 0);
         L().print(F(",failsafe="));    L().print((int)s_failsafe.level());
         L().print(F(",assist_lockout=")); L().print(s_assist_lockout ? 1 : 0);
+        L().print(F(",flying="));          L().print(s_flying ? 1 : 0);
         L().println();
     }
 }

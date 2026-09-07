@@ -48,8 +48,9 @@ float Pid::update(float setpoint, float measurement, float dt_s)
     // --- unsaturated output with the current integrator ---
     float out = ff + _p + _i + _d;
 
-    // --- integrate with anti-windup (freeze while pushing further into a rail) ---
-    if (_g.i_max > 0.0f && _g.ki != 0.0f) {
+    // --- integrate with anti-windup (freeze while pushing further into a rail,
+    //     or while integration is externally disabled e.g. on the ground) ---
+    if (_integ_enabled && _g.i_max > 0.0f && _g.ki != 0.0f) {
         const bool sat_hi = out >= _g.out_max;
         const bool sat_lo = out <= _g.out_min;
         if (!((sat_hi && err > 0.0f) || (sat_lo && err < 0.0f))) {

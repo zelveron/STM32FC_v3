@@ -85,10 +85,12 @@ class MonitorApp:
         self.armed_var = tk.StringVar(value="--")
         self.failsafe_var = tk.StringVar(value="--")
         self.lockout_var = tk.StringVar(value="--")
+        self.integ_var = tk.StringVar(value="--")
         self.cal_var = tk.StringVar(value="--")
         self._row(fc_frame, "Armed", self.armed_var)
         self._row(fc_frame, "Failsafe", self.failsafe_var)
         self._row(fc_frame, "Assist lockout", self.lockout_var)
+        self._row(fc_frame, "Stab integrators", self.integ_var)
         self._row(fc_frame, "Gyro cal", self.cal_var)
 
         # --- RC in / servo out ---
@@ -321,6 +323,8 @@ class MonitorApp:
             self.failsafe_var.set("OK" if fs == "0" else f"ENGAGED (lvl {fs})")
             lock = kv.get("assist_lockout") == "1"
             self.lockout_var.set("LATCHED — IMU fault" if lock else "clear")
+            flying = kv.get("flying") == "1"
+            self.integ_var.set("active (flying)" if flying else "frozen (on ground)")
 
         elif tag == "MODE_CHANGE" and len(parts) == 2:
             # one-shot from the firmware on every bumpless switch; the 2 Hz MODE

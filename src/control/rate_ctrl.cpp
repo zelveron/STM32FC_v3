@@ -14,6 +14,13 @@ void RateController::reset()
     _roll.reset(); _pitch.reset(); _yaw.reset();
 }
 
+void RateController::set_integrator_enabled(bool en)
+{
+    _roll.set_integrator_enabled(en);
+    _pitch.set_integrator_enabled(en);
+    _yaw.set_integrator_enabled(en);
+}
+
 void RateController::update(float des_p, float des_q, float des_r,
                             float gyro_p, float gyro_q, float gyro_r, float dt_s,
                             float& out_roll, float& out_pitch, float& out_yaw)

@@ -26,6 +26,9 @@ public:
     void configure(const RateCtrlConfig& c);
     void reset();
 
+    // Freeze/thaw all three axis integrators (see Pid::set_integrator_enabled).
+    void set_integrator_enabled(bool en);
+
     // rates in deg/s; outputs in [-1,+1].
     void update(float des_p, float des_q, float des_r,
                 float gyro_p, float gyro_q, float gyro_r, float dt_s,

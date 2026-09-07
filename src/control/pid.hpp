@@ -33,6 +33,12 @@ public:
     void  configure(const PidGains& g, float sample_hz);
     float update(float setpoint, float measurement, float dt_s);
 
+    // Freeze/thaw integration. While disabled the I term still contributes to
+    // the output but stops accumulating -- used to stop windup against a stuck
+    // plant (aircraft on the ground: a constant attitude error demands a body
+    // rate that never happens, so I would otherwise pin to i_max).
+    void  set_integrator_enabled(bool en) { _integ_enabled = en; }
+
     // Force I so that update(setpoint, measurement, dt) returns ~desired_out.
     void  preset_integrator(float setpoint, float measurement, float desired_out);
     void  reset();
@@ -48,6 +54,7 @@ private:
     float _prev_meas = 0.0f;
     float _d_filt    = 0.0f;
     bool  _primed    = false;
+    bool  _integ_enabled = true;
     float _p = 0.0f, _d = 0.0f;
 };
 
