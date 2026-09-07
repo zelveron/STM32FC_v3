@@ -18,7 +18,11 @@
 #include "control/mixer.hpp"
 #include "core/failsafe.hpp"
 #include "core/arming.hpp"
+#include "core/log_ring.hpp"
+#include "core/log_frame.hpp"
 #include "modes/mode_manual.hpp"
+
+#include <cstring>
 
 namespace {
 
@@ -148,6 +152,59 @@ int main()
         fails += check("mode_manual: roll -> ailerons, throttle -> ESCs",
                        o.ch[0] == 0.4f && o.ch[1] == 0.4f &&
                        o.ch[6] == 0.3f && o.ch[7] == 0.3f);
+    }
+
+    // --- log_ring ---
+    {
+        static core::LogRing ring;   // 8 KB -- keep off the test stack
+        fails += check("ring empty", ring.used() == 0 && ring.drops() == 0);
+
+        uint8_t a[100]; for (int i = 0; i < 100; i++) a[i] = (uint8_t)(i * 7);
+        fails += check("ring push 100", ring.push(a, 100) && ring.used() == 100);
+
+        uint8_t b[100];
+        fails += check("ring peek matches", ring.peek(b, 100) == 100 &&
+                                            std::memcmp(a, b, 100) == 0);
+        ring.consume(40);
+        fails += check("ring consume 40 -> used 60", ring.used() == 60);
+
+        // overflow: try to push more than fits -> dropped whole, counted
+        uint8_t big[core::LogRing::kSize];
+        fails += check("ring overflow -> drop + count",
+                       !ring.push(big, sizeof(big)) && ring.drops() == 1 &&
+                       ring.used() == 60);
+
+        // wraparound integrity: many push/consume cycles across the boundary
+        bool wrap_ok = true;
+        for (int k = 0; k < 500 && wrap_ok; k++) {
+            uint8_t w[300], r[300];
+            for (int i = 0; i < 300; i++) w[i] = (uint8_t)(k + i);
+            if (!ring.push(w, 300)) { wrap_ok = false; break; }
+            if (ring.peek(r, 300) < 300) { wrap_ok = false; break; }
+            // (older bytes are still in front; just check the tail advances cleanly)
+            ring.consume(300);
+        }
+        fails += check("ring wraparound 500x300 clean", wrap_ok);
+    }
+
+    // --- log_frame ---
+    {
+        fails += check("crc16 CCITT('123456789') == 0x29B1",
+                       core::log_crc16("123456789", 9) == 0x29B1);
+
+        core::LogFrame f;
+        std::memset(&f, 0, sizeof(f));
+        f.t_ms = 12345; f.acc[2] = 2048; f.rc_us[0] = 1500; f.flags = core::LOG_ARMED;
+        core::log_frame_finalize(f);
+        fails += check("log_frame_valid after finalize", core::log_frame_valid(f));
+        reinterpret_cast<uint8_t*>(&f)[10] ^= 0xFF;
+        fails += check("log_frame_valid false after corruption", !core::log_frame_valid(f));
+
+        core::LogFileHeader h; core::log_file_header_init(h);
+        fails += check("file header tag/size",
+                       std::memcmp(h.tag, "STFC", 4) == 0 &&
+                       h.frame_size == (uint8_t)sizeof(core::LogFrame));
+        std::printf("  sizeof(LogFrame)=%zu\n", sizeof(core::LogFrame));
     }
 
     std::printf(fails ? "\nRESULT: %d FAIL\n" : "\nRESULT: all pass\n", fails);
