@@ -29,6 +29,7 @@
 #include "control/rc_channel.hpp"
 #include "control/srv_channel.hpp"
 #include "control/mixer.hpp"
+#include "control/surface_test.hpp"
 #include "modes/mode_manual.hpp"
 #include "core/usb_stream.hpp"
 #include "core/log_ring.hpp"
@@ -77,6 +78,7 @@ control::RcChannel  s_rc_roll, s_rc_pitch, s_rc_yaw;   // symmetric, 1000/1500/2
 control::RcChannel  s_rc_thr;                          // unipolar throttle
 control::SrvChannel s_srv[8];                          // per-output us mapping
 modes::ModeManual   s_mode_manual;
+control::SurfaceTest s_surface_test;                   // gyro-cal-done surface sweep
 core::Failsafe      s_failsafe;
 core::Arming        s_arming;
 control::Outputs    s_out;                             // last outputs (bumpless)
@@ -169,12 +171,31 @@ void task_control()   // 400 Hz -- CRSF -> arming/failsafe -> mode -> mixer -> P
 
     s_mode_manual.update(sticks, dt_s, s_out);
 
-    const bool fs    = s_failsafe.active();
     const bool armed = s_arming.armed();
+
+    // "gyro-bias cal complete" signal: on the rising edge of bias_ready, while
+    // disarmed, sweep aileron -> elevator -> rudder once so the pilot sees it.
+    static bool prev_bias_ready = false;
+    const bool bias_ready = s_imu_prep.bias_ready();
+    if (bias_ready && !prev_bias_ready) {
+        L().println(F("CAL_DONE,gyro_bias"));            // one-shot marker
+        if (!armed) s_surface_test.start();
+    }
+    prev_bias_ready = bias_ready;
+    if (armed) s_surface_test.cancel();
+
+    float sw_r, sw_p, sw_y;
+    const bool sweeping = s_surface_test.step(dt_s, sw_r, sw_p, sw_y);
+
+    const bool fs = s_failsafe.active();
     for (int i = 0; i < 8; i++) {
         const bool is_thr = (i == 6 || i == 7);
         uint16_t us;
-        if      (fs)                us = s_srv[i].safe_us(is_thr);
+        if (sweeping && !is_thr) {                      // surface sweep overrides (disarmed)
+            const float d = (i <= 1) ? sw_r : (i <= 3) ? sw_p : sw_y;
+            us = s_srv[i].from_norm(d);
+        }
+        else if (fs)                us = s_srv[i].safe_us(is_thr);
         else if (is_thr && !armed)  us = s_srv[i].safe_us(true);          // motors off
         else if (is_thr)            us = s_srv[i].from_unipolar(s_out.ch[i]);
         else                        us = s_srv[i].from_norm(s_out.ch[i]);

@@ -18,6 +18,7 @@
 #include "control/rc_channel.hpp"
 #include "control/srv_channel.hpp"
 #include "control/mixer.hpp"
+#include "control/surface_test.hpp"
 #include "core/failsafe.hpp"
 #include "core/arming.hpp"
 #include "core/log_ring.hpp"
@@ -195,6 +196,33 @@ int main()
         core::Arming c;
         c.update({ true, 0.0f, true });
         fails += check("arm: will not arm during failsafe", !c.armed());
+    }
+
+    // --- surface_test sweep: aileron then elevator then rudder, each hits +/-1 ---
+    {
+        control::SurfaceTest st;
+        fails += check("surface_test inactive by default", !st.active());
+        st.start();
+        float r, p, y;
+        float rmin=9, rmax=-9, pmin=9, pmax=-9, ymin=9, ymax=-9;
+        bool axis_bleed = false;
+        double acc = 0.0;
+        for (int i = 0; i < 800; i++) {   // 2 s @ 400 Hz (sweep is 1.8 s)
+            if (!st.step(0.0025f, r, p, y)) break;
+            acc += 0.0025;                 // track sweep's own elapsed time
+            const double eps = 0.02;      // skip a guard band around segment edges
+            const bool near_edge = (acc > 0.6 - eps && acc < 0.6 + eps) ||
+                                   (acc > 1.2 - eps && acc < 1.2 + eps);
+            if (near_edge) continue;
+            if (acc < 0.6)      { if (p!=0||y!=0) axis_bleed = true; if(r<rmin)rmin=r; if(r>rmax)rmax=r; }
+            else if (acc < 1.2) { if (r!=0||y!=0) axis_bleed = true; if(p<pmin)pmin=p; if(p>pmax)pmax=p; }
+            else                { if (r!=0||p!=0) axis_bleed = true; if(y<ymin)ymin=y; if(y>ymax)ymax=y; }
+        }
+        fails += check("surface_test: each axis moves only in its segment", !axis_bleed);
+        fails += check("surface_test: aileron reaches +/-1",  rmax > 0.95f && rmin < -0.95f);
+        fails += check("surface_test: elevator reaches +/-1", pmax > 0.95f && pmin < -0.95f);
+        fails += check("surface_test: rudder reaches +/-1",   ymax > 0.95f && ymin < -0.95f);
+        fails += check("surface_test finishes and returns to inactive", !st.active());
     }
 
     // --- mode_manual = passthrough via the mixer ---

@@ -266,3 +266,15 @@ pitch error across the built-in maneuver INCLUDING the throttle bump dropped
 from ~13 deg (old fixed-gain filter) to ~4.6 deg; `--check` asserts < 8 deg.
 Deferred: 6-point accel calibration (needs `core/params`), UBX-NAV-PVT binary
 parser (Phase 5). Builds green all envs; 11 new native + 2 new SITL assertions.
+
+**2026-09-07 — "gyro cal complete" = a control-surface sweep.** So the pilot
+at the aircraft knows the boot gyro-bias calibration finished without a
+screen: on the rising edge of `bias_ready`, while disarmed, `control::SurfaceTest`
+sweeps aileron -> elevator -> rudder in sequence, each centre -> +full ->
+-full -> centre over 0.6 s (~1.8 s total). It overrides the mixer output for
+surfaces during the sweep and never touches throttle; it is cancelled if the
+aircraft arms. `main_stm32` also emits a one-shot `CAL_DONE,gyro_bias` line.
+Header-only, 6 native assertions. NOTE on timing: the calibration accumulates
+from the moment `task_bmi` starts (after setup(), ~1-3 s) and completes after
+~4 s of the gyro span staying under 4 dps -- it is continuous, not timed;
+just do not move the aircraft until the surfaces wiggle.
