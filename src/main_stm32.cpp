@@ -452,16 +452,16 @@ void task_log()   // 50 Hz -- pack one binary frame into the ring (non-blocking)
     s_log_ring.push(&f, sizeof(f));   // drops + counts if the ring is full
 }
 
-void task_log_flush()   // 10 Hz -- drain to SD; blocking lives here, isolated
+void task_log_flush()   // 1 Hz -- drain to SD; blocking lives here, isolated
 {
-    // Blocking SD path: a 512 B write to the fitted card usually returns in
-    // 1-3 ms but occasionally stalls ~14 ms on the card's flash-program cycle.
-    // Total SD-blocked time is inflow-bound (~20 ms/s) whatever the batch size,
-    // so favour MANY SMALL hits over few deep ones -- a <=1-period stall on the
-    // 400 Hz loop is one skipped beat (invisible, dt-corrected), a 10 ms gap is
-    // four. 10 Hz * up to 2 sectors: normal call writes 0-1 sectors, a backed-up
-    // ring clears in two. Real fix for the tail: a non-blocking SD write path.
-    sd_bin_log::flush_step(1024);
+    // Blocking SD path, ~20 ms/s of unavoidable card-busy time (inflow-bound).
+    // Measured: chunking it into few LARGE flushes beats many small ones -- a
+    // long block trips the scheduler's critical re-service so control/bmi run
+    // the instant the write returns, whereas a stream of ~2 ms blocks just makes
+    // control quietly late every time. So: 1 Hz, drain up to half the ring
+    // (8 kB) per call. The 16 kB ring holds ~3.5 s, so ~1 s of pending data per
+    // flush is a comfortable ~25 %. Real fix for the tail: non-blocking SD.
+    sd_bin_log::flush_step(8192);
 
     // Commit the FAT/dir, but ONLY on the ground -- f_sync() is a ~30 ms blocking
     // multi-block op. In flight the sector writes still land on the card; the
@@ -697,7 +697,7 @@ void setup()
     sched::add("bmi_probe",  2, task_bmi_probe);  // cheap IMU hot-plug poll
     sched::add("bmp",       50, task_bmp);
     sched::add("log",       50, task_log);        // pack frame -> ring (fast)
-    sched::add("log_flush", 10, task_log_flush);  // ring -> SD + f_sync (blocking, isolated)
+    sched::add("log_flush",  1, task_log_flush);  // ring -> SD + f_sync (blocking, isolated)
     sched::add("stream",    20, task_stream);     // BMI/ATT/OUT/RC USB echo
     sched::add("cmd",       10, task_cmd);        // USB bench commands
     sched::add("debug",      2, task_debug);      // low-rate status lines
