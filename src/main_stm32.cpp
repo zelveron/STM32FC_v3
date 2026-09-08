@@ -96,6 +96,7 @@ modes::Mode*        s_mode_active = &s_mode_manual;    // current mode object
 modes::Id           s_mode_cur    = modes::Id::manual; // its id, for the log frame
 bool               s_assist_lockout = false;          // latched: IMU faulted in ASSIST
 bool               s_flying         = false;          // latched: armed + spooled/rolling
+bool               s_sim_flying     = false;          // bench: SIM_FLYING forces s_flying
 control::SurfaceTest s_surface_test;                   // gyro-cal-done surface sweep
 core::Failsafe      s_failsafe;
 core::Arming        s_arming;
@@ -250,7 +251,9 @@ void task_control()   // 400 Hz -- CRSF -> arming/failsafe -> mode -> mixer -> P
     // held until disarm. Gates the stabilizer integrators so they never wind
     // against a stationary airframe (armed on the bench = frozen; the moment
     // you spool up or roll, they arm and re-preset bumplessly).
-    if (!armed) {
+    if (s_sim_flying) {
+        s_flying = true;                          // bench override (SIM_FLYING)
+    } else if (!armed) {
         s_flying = false;
     } else if (sticks.throttle > kFlyThrottle ||
                (ublox::speed_kmh() * (1.0f / 3.6f)) > kFlyGroundSpeedMps) {
@@ -449,19 +452,23 @@ void task_log()   // 50 Hz -- pack one binary frame into the ring (non-blocking)
     s_log_ring.push(&f, sizeof(f));   // drops + counts if the ring is full
 }
 
-void task_log_flush()   // 25 Hz -- drain to SD; blocking lives here, isolated
+void task_log_flush()   // 5 Hz -- drain to SD; blocking lives here, isolated
 {
-    // One 512-byte sector per call: caps the worst-case blocking to a single
-    // SD write (incl. the card's occasional wear-level tail) instead of a
-    // multi-sector burst. 25 Hz * 512 B = 12.8 kB/s drain >> ~4.3 kB/s inflow.
-    sd_bin_log::flush_step(512);
+    // A single 512 B write to this card can still stall ~14 ms on the card's
+    // internal flash-program cycle -- unavoidable with a blocking SD path (the
+    // real fix is a non-blocking write state machine). So minimise how OFTEN
+    // the loop is hit: batch at 5 Hz, up to 4 sectors (2 kB) per call.
+    // 5 Hz * 2 kB = 10 kB/s drain >> ~4.3 kB/s inflow; ring keeps >50% headroom.
+    sd_bin_log::flush_step(2048);
 
-    // Commit the FAT/dir every ~10 s. f_sync() is blocking so it stays in this
-    // isolated task; the binary log is CRC-framed and resyncs on the magic, so
-    // an un-synced tail after a hard power loss costs only the last few seconds.
+    // Commit the FAT/dir, but ONLY on the ground -- f_sync() is a ~30 ms blocking
+    // multi-block op. In flight the sector writes still land on the card; the
+    // dir entry is refreshed the moment we stop (disarm / not flying) and on a
+    // normal landing the file closes clean. A hard power loss mid-flight leaves
+    // the data on the card but the dir size stale (raw-sector recovery).
     static uint32_t l_sync = 0;
     const uint32_t now = millis();
-    if ((now - l_sync) >= 10000) { l_sync = now; sd_bin_log::sync(); }
+    if (!s_flying && (now - l_sync) >= 3000) { l_sync = now; sd_bin_log::sync(); }
 }
 
 void task_debug()   // 2 Hz -- low-rate status lines (no blocking calls here)
@@ -579,8 +586,9 @@ void task_sched_report()   // 1 Hz -- per-task DWT timing + overruns
 }
 
 // Bench command reader over USB CDC. Newline-terminated tokens:
-//   RESET_STATS  -- zero the scheduler counters for a clean measurement window
-//   REBOOT_BL    -- jump to the STM32 system bootloader (DFU) without the button
+//   RESET_STATS   -- zero the scheduler counters for a clean measurement window
+//   REBOOT_BL     -- jump to the STM32 system bootloader (DFU) without the button
+//   SIM_FLYING 0|1 -- bench: force the "flying" latch (f_sync off, integrators armed)
 void task_cmd()   // 10 Hz
 {
     static char buf[24];
@@ -593,6 +601,8 @@ void task_cmd()   // 10 Hz
             buf[len] = 0;
             if      (!strcmp(buf, "RESET_STATS")) { sched::reset_stats(); L().println(F("ACK,RESET_STATS")); }
             else if (!strcmp(buf, "REBOOT_BL"))   { L().println(F("ACK,REBOOT_BL")); hal::delay_ms(50); hal::jump_to_bootloader(); }
+            else if (!strcmp(buf, "SIM_FLYING 1")) { s_sim_flying = true;  L().println(F("ACK,SIM_FLYING,1")); }
+            else if (!strcmp(buf, "SIM_FLYING 0")) { s_sim_flying = false; L().println(F("ACK,SIM_FLYING,0")); }
             else if (len)                         { L().print(F("NAK,")); L().println(buf); }
             len = 0;
         } else if (len < sizeof(buf) - 1) {
@@ -685,7 +695,7 @@ void setup()
     sched::add("bmi_probe",  2, task_bmi_probe);  // cheap IMU hot-plug poll
     sched::add("bmp",       50, task_bmp);
     sched::add("log",       50, task_log);        // pack frame -> ring (fast)
-    sched::add("log_flush", 25, task_log_flush);  // ring -> SD + f_sync (blocking, isolated)
+    sched::add("log_flush",  5, task_log_flush);  // ring -> SD + f_sync (blocking, isolated)
     sched::add("stream",    20, task_stream);     // BMI/ATT/OUT/RC USB echo
     sched::add("cmd",       10, task_cmd);        // USB bench commands
     sched::add("debug",      2, task_debug);      // low-rate status lines
