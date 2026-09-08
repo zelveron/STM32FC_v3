@@ -271,17 +271,33 @@ with the rest of the bench tooling.)*
 
 ## SD card logging
 
-SDIO, FatFs. Firmware writes `FLTxxxxx.CSV` (next free index each boot):
+SDIO, FatFs. Firmware writes **binary** `FLTxxxxx.BIN` (next free index each
+boot) — a 20-byte `LogFileHeader` (`STFC` + version + scales) then packed
+86-byte `LogFrame` records, each with magic `0x5AA5` and a trailing
+CRC-16/CCITT. Layout is defined once in `src/core/log_frame.hpp`. ~50 Hz, via
+an 16 KB SPSC ring drained by `task_log_flush`. No `sprintf` in the hot path.
 
+Each frame carries: `t_ms`, accel[3] (g), gyro[3] (dps), attitude[3] (deg),
+`press_pa`, `temp`, baro AGL, GPS lat/lon/alt/speed/sats/fix, all 8 `rc_us`
+inputs, all 8 `out_us` outputs, `mode`, and armed / failsafe / requested-mode
+flags.
+
+Decode / plot on the PC:
+
+```bash
+python3 tools/parse_bin_log.py FLT00007.BIN            # -> FLT00007.csv (real units)
+python3 tools/parse_bin_log.py FLT00007.BIN --summary  # frame count / Hz / CRC errors
+python3 tools/plot_log.py       FLT00007.BIN           # interactive: pick channels,
+                                                      #   Plot / Overlay / Grid, x = time (s)
 ```
-t_ms,ax,ay,az,gx,gy,gz,roll,pitch,yaw,press_hPa,temp_c,alt_m,gps_time,gps_sats,gps_speed_kmh
-```
 
-~50 Hz, flushed every 1 s. Vendored `lib/STM32SD/` and `lib/FatFs/` contain
-critical fixes — **do not regenerate them from upstream** (see Known issues #2).
+`plot_log.py` needs `python3-matplotlib python3-numpy python3-tk` (apt). It
+also auto-writes the `.csv` next to the `.BIN` on open.
 
-This CSV format is bench-only and will be replaced by binary logging. Once USB
-is removed, the SD log becomes the primary flight recorder.
+Vendored `lib/STM32SD/` and `lib/FatFs/` contain critical fixes — **do not
+regenerate them from upstream** (see Known issues #2). The SD write path is
+still blocking (Known issues #10); it is the SD log that keeps the loop from
+being hard-real-time. Once USB is removed the SD log is the primary recorder.
 
 ---
 
