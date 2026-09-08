@@ -17,7 +17,10 @@ namespace core {
 
 class LogRing {
 public:
-    static constexpr size_t kSize = 8192;   // must stay a power of two
+    // ~3.5 s of log at the current frame rate. Must stay a power of two. Sized
+    // so a multi-hundred-ms SD stall (worst-case card hiccup) never drops a
+    // frame, while leaving RAM headroom for later work (F407 has 128 KB).
+    static constexpr size_t kSize = 16384;
 
     // Append len bytes atomically. Returns false and bumps drops() if the ring
     // cannot hold the whole record right now.
