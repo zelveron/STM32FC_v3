@@ -452,14 +452,16 @@ void task_log()   // 50 Hz -- pack one binary frame into the ring (non-blocking)
     s_log_ring.push(&f, sizeof(f));   // drops + counts if the ring is full
 }
 
-void task_log_flush()   // 5 Hz -- drain to SD; blocking lives here, isolated
+void task_log_flush()   // 10 Hz -- drain to SD; blocking lives here, isolated
 {
-    // A single 512 B write to this card can still stall ~14 ms on the card's
-    // internal flash-program cycle -- unavoidable with a blocking SD path (the
-    // real fix is a non-blocking write state machine). So minimise how OFTEN
-    // the loop is hit: batch at 5 Hz, up to 4 sectors (2 kB) per call.
-    // 5 Hz * 2 kB = 10 kB/s drain >> ~4.3 kB/s inflow; ring keeps >50% headroom.
-    sd_bin_log::flush_step(2048);
+    // Blocking SD path: a 512 B write to the fitted card usually returns in
+    // 1-3 ms but occasionally stalls ~14 ms on the card's flash-program cycle.
+    // Total SD-blocked time is inflow-bound (~20 ms/s) whatever the batch size,
+    // so favour MANY SMALL hits over few deep ones -- a <=1-period stall on the
+    // 400 Hz loop is one skipped beat (invisible, dt-corrected), a 10 ms gap is
+    // four. 10 Hz * up to 2 sectors: normal call writes 0-1 sectors, a backed-up
+    // ring clears in two. Real fix for the tail: a non-blocking SD write path.
+    sd_bin_log::flush_step(1024);
 
     // Commit the FAT/dir, but ONLY on the ground -- f_sync() is a ~30 ms blocking
     // multi-block op. In flight the sector writes still land on the card; the
@@ -695,7 +697,7 @@ void setup()
     sched::add("bmi_probe",  2, task_bmi_probe);  // cheap IMU hot-plug poll
     sched::add("bmp",       50, task_bmp);
     sched::add("log",       50, task_log);        // pack frame -> ring (fast)
-    sched::add("log_flush",  5, task_log_flush);  // ring -> SD + f_sync (blocking, isolated)
+    sched::add("log_flush", 10, task_log_flush);  // ring -> SD + f_sync (blocking, isolated)
     sched::add("stream",    20, task_stream);     // BMI/ATT/OUT/RC USB echo
     sched::add("cmd",       10, task_cmd);        // USB bench commands
     sched::add("debug",      2, task_debug);      // low-rate status lines
