@@ -449,15 +449,19 @@ void task_log()   // 50 Hz -- pack one binary frame into the ring (non-blocking)
     s_log_ring.push(&f, sizeof(f));   // drops + counts if the ring is full
 }
 
-void task_log_flush()   // 25 Hz -- drain 512-byte sectors to SD; blocking lives here
+void task_log_flush()   // 25 Hz -- drain to SD; blocking lives here, isolated
 {
-    sd_bin_log::flush_step();
+    // One 512-byte sector per call: caps the worst-case blocking to a single
+    // SD write (incl. the card's occasional wear-level tail) instead of a
+    // multi-sector burst. 25 Hz * 512 B = 12.8 kB/s drain >> ~4.3 kB/s inflow.
+    sd_bin_log::flush_step(512);
 
-    // commit the FAT / directory entry every ~2 s -- f_sync() is blocking, so it
-    // stays inside this isolated SD task, never in task_debug on the loop.
+    // Commit the FAT/dir every ~10 s. f_sync() is blocking so it stays in this
+    // isolated task; the binary log is CRC-framed and resyncs on the magic, so
+    // an un-synced tail after a hard power loss costs only the last few seconds.
     static uint32_t l_sync = 0;
     const uint32_t now = millis();
-    if ((now - l_sync) >= 2000) { l_sync = now; sd_bin_log::sync(); }
+    if ((now - l_sync) >= 10000) { l_sync = now; sd_bin_log::sync(); }
 }
 
 void task_debug()   // 2 Hz -- low-rate status lines (no blocking calls here)
