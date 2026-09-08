@@ -197,7 +197,8 @@ Flashes over USB DFU (`0483:df11`). **Enumeration is flaky on the Raspberry
 Pi** — `dfu-util -l` often shows nothing (kernel logs
 `device descriptor read/64, error -110`).
 
-1. Set **BOOT0 = 1** and press **reset** (keep BOOT0 high).
+1. Set **BOOT0 = 1** and press **reset** (keep BOOT0 high) — or send `REBOOT_BL`
+   over the USB CDC console (no button needed; see below).
 2. If `dfu-util -l` is empty, unplug and replug USB while BOOT0 stays high.
    Confirm the device shows `0483:df11`, not `0483:5740` (5740 = the running
    app, meaning BOOT0 is not actually high).
@@ -206,6 +207,18 @@ Pi** — `dfu-util -l` often shows nothing (kernel logs
    dfu-util -a 0 -s 0x08000000:leave -D .pio/build/black_f407ve/firmware.bin
    ```
 4. Set **BOOT0 = 0** and press **reset** to run.
+
+**Pi xHCI gets stuck on the live re-enumeration.** A *cold* plug into DFU
+enumerates fine, but the CDC→DFU transition (`REBOOT_BL`, or any app→bootloader
+jump) reliably wedges the Pi port with `error -110`, and it stays wedged across
+replugs on that port. Unbinding/rebinding the `xhci-hcd.N` platform driver does
+**not** clear it. What works: move the board to a physical port on the *other*
+xHCI controller, or reboot the Pi. This is a Pi-host bug, not firmware.
+
+**USB CDC console commands** (newline-terminated, into `/dev/ttyACM0` @ 115200):
+`RESET_STATS` (zero the scheduler counters for a clean `SCHED` measurement),
+`REBOOT_BL` (jump to the DFU bootloader), `SIM_FLYING 0|1` (bench: force the
+`s_flying` latch to exercise the in-flight logging / integrator path).
 
 ---
 
@@ -299,7 +312,10 @@ is removed, the SD log becomes the primary flight recorder.
    an empty fix; time fills in as soon as any satellite is heard. Indoors you
    may see `sats=0` forever.
 5. **DFU enumeration is flaky** — see Flash section. `:leave` makes the board run
-   the app immediately after flashing.
+   the app immediately after flashing. The Pi xHCI also wedges (`error -110`) on
+   the CDC→DFU *live* transition and stays wedged on that port across replugs;
+   fix is a different physical port (other controller) or a Pi reboot — a
+   driver unbind/rebind does not clear it.
 6. **Serial capture contention.** `tools/gui.py` and any `cat /dev/ttyACM0` open
    the same CDC port and split the stream. Kill the GUI before a clean `cat`
    capture. `tools/capture.py` survives USB re-enumeration.
@@ -311,6 +327,14 @@ is removed, the SD log becomes the primary flight recorder.
 9. **No sensor enable pins.** Every sensor is always powered. The old firmware
    drove PB11 / PE11 / PC14 as "enables"; those were removed (PB11 and PE11 are
    reserved flight-I/O pins). Do not add sensor power-gate code.
+10. **SD writes are still blocking.** `disk_write` busy-waits on the card; the
+    fitted card returns most 512 B writes in 1-3 ms but occasionally stalls
+    ~14 ms on its flash-program cycle. This is the one thing keeping the 400 Hz
+    loop from being hard-real-time (`worst_pass_us` ~15 ms, rare, dt-corrected,
+    recovered by the scheduler's critical re-service). `task_log_flush` batches
+    to 1 Hz to minimise how often it hits. Real fix: a non-blocking SD write
+    path (`HAL_SD_GetCardState` polled per tick). A high-endurance / industrial
+    card also shrinks the tail. See `docs/DECISIONS.md` 2026-09-08.
 
 ---
 

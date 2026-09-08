@@ -402,3 +402,28 @@ Changes:
   so the bias window stays ~4 s regardless of rate.
 Registration order is now: bmi*, control*, crsf, gps, crsf_tx, bmi_probe, bmp,
 log, log_flush, stream, cmd, debug, sched.
+
+**2026-09-08 — SD write jitter characterised; batched flush + 16 KB ring.**
+Follow-on measurement (added `SIM_FLYING 0|1` to force the in-flight `s_flying`
+latch on the bench). With the priority pass in place the entire control/estim
+path is tiny -- `control` 36 us mean / <=68 us max (2500 us budget), `bmi`
+85 us / <=117 us (5000 us budget), ~90 k loop passes/s. The one residual is
+`worst_pass_us` ~= 14-16 ms, all of it a single blocking SD sector write: the
+fitted card returns most 512 B writes in 1-3 ms but occasionally stalls ~14 ms
+on its internal flash-program cycle. That is card-busy time, not transfer time,
+so DMA would not remove it -- the real fix is a non-blocking SD write path
+(issue one block, return, poll `HAL_SD_GetCardState` next tick). Tracked as the
+next E-item; a high-endurance / industrial card also shrinks the tail to 1-3 ms
+with no code change. Interim tuning, measured on hardware (control dispatched
+>1.25 ms late, per second): 25 Hz/512 B = 4.5, 10 Hz/1 kB = 6.2, 5 Hz/2 kB =
+3.4, 1 Hz/8 kB ~= ground-mixed 1.6. Few LARGE flushes win -- a long block trips
+the critical re-service so `control`/`bmi` run the instant the write returns,
+whereas a stream of ~2 ms blocks just makes `control` quietly late each time.
+Settled: `log_flush` @ 1 Hz draining up to half the ring; `core/log_ring`
+8 KB -> 16 KB (~3.5 s) so a multi-hundred-ms card hiccup never drops a frame
+(RAM 14 % -> 21 %); `f_sync()` only while `!s_flying` (in flight the sectors
+still land, the dir entry is refreshed on landing; a hard power loss mid-flight
+leaves the data on the card with a stale dir size -> raw-sector recovery).
+Net: `worst_pass_us` 104 ms -> ~15 ms, and the rate loop is on-time ~99 % with
+the late dispatches bounded and dt-corrected. Flight-safe for MANUAL/ASSIST;
+not yet hard-real-time.
