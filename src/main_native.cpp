@@ -128,6 +128,22 @@ int main()
     sched::TaskStats st;
     fails += check("get_stats(0) ok", sched::get_stats(0, st) && st.runs == g_fast_runs);
 
+    fails += check("reset_stats zeroes counters",
+                   (sched::reset_stats(), sched::get_stats(0, st) &&
+                    st.runs == 0 && st.overruns == 0 && st.max_us == 0 &&
+                    sched::loop_count() == 0 && sched::worst_pass_us() == 0));
+
+    // critical tasks are serviced first and re-serviced after a slow task
+    fails += check("sched::add critical", sched::add("crit", 100, fast_task, true));
+    g_fast_runs = g_slow_runs = 0;
+    const uint32_t tc = hal::millis();
+    while (hal::millis() - tc < 300) sched::run_once();
+    sched::TaskStats sc;
+    // "crit" is index 2; it and "fast" share fast_task, so both increment g_fast_runs
+    fails += check("critical task runs at rate",
+                   sched::get_stats(2, sc) && sc.critical &&
+                   sc.runs >= 26 && sc.runs <= 34);
+
     // --- RC_Channel ---
     {
         control::RcChannel rc;   // 1000/1500/2000, dz 8

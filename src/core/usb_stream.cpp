@@ -49,5 +49,6 @@ void      begin()      { SerialUSB.begin(); }
 bool      host_ready() { return (bool)SerialUSB; }
 Print&    log()        { return s_log; }
 uint32_t  drops()      { return s_log.drops(); }
+int       read()       { return SerialUSB.available() ? SerialUSB.read() : -1; }
 
 } // namespace usb_stream

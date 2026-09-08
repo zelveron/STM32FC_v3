@@ -14,11 +14,17 @@ float lpf_alpha(float fc, float dt)
 }
 } // namespace
 
-void ImuPrep::configure(float sample_hz, float gyro_lpf_hz, float acc_lpf_hz)
+void ImuPrep::configure(float sample_hz, float gyro_lpf_hz, float acc_lpf_hz,
+                        float cal_seconds)
 {
     const float dt = (sample_hz > 0.0f) ? 1.0f / sample_hz : 0.0f;
     _ga = lpf_alpha(gyro_lpf_hz, dt);
     _aa = lpf_alpha(acc_lpf_hz, dt);
+
+    int n = (int)(cal_seconds * sample_hz);
+    if (n < 100)  n = 100;
+    if (n > 8000) n = 8000;
+    _cal_n = n;
 }
 
 void ImuPrep::restart_bias_cal()
@@ -47,7 +53,7 @@ ImuSample ImuPrep::process(float gx, float gy, float gz,
             for (int i = 0; i < 3; i++) { _min[i] = _max[i] = g[i]; }
         }
         _sx += gx; _sy += gy; _sz += gz;
-        if (++_cn >= kCalSamples) {
+        if (++_cn >= _cal_n) {
             _bx = _sx / _cn; _by = _sy / _cn; _bz = _sz / _cn;
             _bias_ready = true;
         }

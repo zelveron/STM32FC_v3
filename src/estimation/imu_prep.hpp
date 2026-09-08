@@ -25,7 +25,9 @@ struct ImuSample {
 class ImuPrep {
 public:
     // sample_hz: nominal IMU rate. *_lpf_hz: -3 dB cutoffs (<= 0 disables).
-    void configure(float sample_hz, float gyro_lpf_hz, float acc_lpf_hz);
+    // cal_seconds: length of the stationary gyro-bias window.
+    void configure(float sample_hz, float gyro_lpf_hz, float acc_lpf_hz,
+                   float cal_seconds = 4.0f);
 
     ImuSample process(float gx_dps, float gy_dps, float gz_dps,
                       float ax_g, float ay_g, float az_g, float dt_s);
@@ -36,8 +38,8 @@ public:
 
 private:
     // --- gyro bias cal ---
-    static constexpr int   kCalSamples = 400;    // ~4 s @ 100 Hz
     static constexpr float kMoveSpanDps = 4.0f;  // max-min over the window
+    int   _cal_n = 400;                          // window length, set by configure()
     int   _cn = 0;
     float _sx = 0, _sy = 0, _sz = 0;
     float _min[3] = { 1e9f, 1e9f, 1e9f };

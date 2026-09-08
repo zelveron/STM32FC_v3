@@ -25,5 +25,6 @@ void      begin();          // SerialUSB.begin()
 bool      host_ready();     // true once the USB host has opened the port
 Print&    log();            // the drop-on-full line logger
 uint32_t  drops();          // cumulative whole lines dropped (host too slow)
+int       read();           // next inbound byte, or -1 if none (for bench commands)
 
 } // namespace usb_stream

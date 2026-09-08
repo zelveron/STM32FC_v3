@@ -371,3 +371,34 @@ NEXT for telemetry: a pack-voltage divider on a spare ADC pin (e.g. PC4 =
 ADC1_IN14) -> `send_battery` -> EdgeTX low-battery callouts; optionally a
 temperature frame (0x0D) for the ESCs/IMU. Course-over-ground for the GPS
 heading field needs NMEA VTG (or the UBX-NAV-PVT switch in Phase 5).
+
+**2026-09-08 — Scheduler priority + loop-timing hardening (flight-readiness
+pass).** Live `SCHED` capture from the board showed `task_control` itself
+healthy (43 us mean vs 2500 us budget) but `worst_pass_us = 104 ms`: the single
+cooperative pass was being stalled by non-critical tasks that also sat *ahead*
+of `bmi`/`control` in registration order -- `bmi_retry` calling the ~ms Bosch
+re-init at 1 Hz (102 ms), `task_debug` doing a blocking `f_sync` + a 64-byte
+hex dump + a print pile (43 ms), SD sector-write tails in `log_flush` (34 ms).
+Changes:
+- `sched::add(..., critical=false)`. Critical tasks (`bmi`, `control`) run at
+  the top of every pass and are re-serviced after any non-critical task that
+  ran > 500 us, so a slow logger / debug / SD write delays the rate loop by at
+  most one such task, not their sum.
+- `sched::reset_stats()` + a USB `RESET_STATS` command, so a clean measurement
+  window can be taken after boot settles. Also added `REBOOT_BL` (jump to the
+  DFU bootloader without the BOOT0 button) via the same tiny `task_cmd` reader.
+- IMU brought up in `setup()` with a bounded retry (was: first scheduler pass).
+  `task_bmi_probe` @ 2 Hz does a cheap chip-id read and only runs the full
+  `begin()` if the part answers -- and never once `s_flying` is latched (a
+  faulted IMU latches MANUAL for the flight anyway; a 100 ms stall in flight is
+  worse than a dead AHRS we are not using).
+- `f_sync()` moved from `task_debug` into the already-SD-isolated
+  `task_log_flush` (~0.5 Hz there).
+- All high-rate USB echo (`BMI`/`ATT`/`OUT`/`RC`) moved off the sample/parse/
+  control tasks into one `task_stream` @ 20 Hz. `LINK` + GPS bring-up dumps
+  moved to `task_debug`; the GPS dumps self-disable after 25 s.
+- IMU sample rate 100 -> 200 Hz (== AHRS rate; half the SPI cost of matching
+  the 400 Hz rate loop). `ImuPrep::configure` gained `cal_seconds` (default 4)
+  so the bias window stays ~4 s regardless of rate.
+Registration order is now: bmi*, control*, crsf, gps, crsf_tx, bmi_probe, bmp,
+log, log_flush, stream, cmd, debug, sched.

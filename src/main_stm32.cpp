@@ -140,28 +140,9 @@ void task_gps()   // 50 Hz -- drain UART, parse, emit position / status
     }
 }
 
-void task_crsf()   // 100 Hz -- drain USART3, parse CRSF, stream channels / link
+void task_crsf()   // 100 Hz -- drain USART3, parse CRSF (RC / link stats)
 {
-    const uint8_t ev = crsf::poll();
-
-    static uint32_t last_rc = 0;
-    if ((ev & crsf::EV_RC) && (millis() - last_rc) >= 50) {   // 20 Hz to USB
-        last_rc = millis();
-        const crsf::Channels& ch = crsf::channels();
-        L().print(F("RC"));
-        for (int i = 0; i < 16; i++) { L().print(','); L().print(ch.us[i]); }
-        L().println();
-    }
-
-    static uint32_t last_link = 0;
-    if ((ev & crsf::EV_LINK) && (millis() - last_link) >= 200) {   // 5 Hz
-        last_link = millis();
-        const crsf::LinkStats& lk = crsf::link();
-        L().print(F("LINK,up_rssi_dbm=")); L().print(lk.up_rssi_dbm);
-        L().print(F(",up_lq="));           L().print(lk.up_lq);
-        L().print(F(",up_snr="));          L().print(lk.up_snr);
-        L().print(F(",rf_mode="));         L().println(lk.rf_mode);
-    }
+    crsf::poll();   // USB echo of RC / LINK is in task_stream / task_debug
 }
 
 // Which mode may actually run this tick. Demotion is downward only and, for an
@@ -323,37 +304,26 @@ void task_control()   // 400 Hz -- CRSF -> arming/failsafe -> mode -> mixer -> P
         if (i < 4) hal::pwm_write_us(hal::PwmGroup::out_1_4, (uint8_t)i,       us);
         else       hal::pwm_write_us(hal::PwmGroup::out_5_8, (uint8_t)(i - 4), us);
     }
+}   // OUT USB line is emitted from task_stream
 
-    static uint32_t last_out = 0;
-    if ((millis() - last_out) >= 50) {   // 20 Hz to USB
-        last_out = millis();
-        L().print(F("OUT"));
-        for (int i = 0; i < 8; i++) { L().print(','); L().print(s_out_us[i]); }
-        L().println();
-    }
-}
-
-void task_bmi_retry()   // 1 Hz -- only acts while the IMU is not up
+void task_bmi_probe()   // 2 Hz -- cheap liveness poll while the IMU is down
 {
-    if (s_bmi_ready) return;
-    if (bmi323::begin()) {
-        s_bmi_ready = true;
-        L().println(F("BMI_STATUS,1"));
-    } else {
-        L().println(F("BMI_STATUS,0"));
-        L().print(F("BMI_RAW,0x"));
-        L().println(bmi323::raw_chip_id(), HEX);
-    }
+    // Never runs the ~ms Bosch re-init from a scheduler pass once flying, and
+    // only runs it at all after a cheap chip-id read confirms the part is back.
+    if (s_bmi_ready || s_flying) return;
+    if (bmi323::raw_chip_id() != 0x43) return;
+    s_bmi_ready = bmi323::begin();
+    L().println(s_bmi_ready ? F("BMI_STATUS,1") : F("BMI_STATUS,0"));
 }
 
-void task_bmi()   // 100 Hz -- read IMU, run AHRS, stream BMI line
+void task_bmi()   // 200 Hz (critical) -- read IMU, prep, run the gated AHRS
 {
     if (!s_bmi_ready) return;
 
     bmi323::Sample s;
     const bmi323::Result r = bmi323::read(s);
     if (r == bmi323::Result::comm_error) {
-        s_bmi_ready = false;              // task_bmi_retry picks it up
+        s_bmi_ready = false;              // task_bmi_probe picks it up (if not flying)
         L().println(F("BMI_STATUS,0"));
         return;
     }
@@ -371,23 +341,39 @@ void task_bmi()   // 100 Hz -- read IMU, run AHRS, stream BMI line
 
     g_ax = p.ax_g;   g_ay = p.ay_g;   g_az = p.az_g;
     g_gx = p.gx_dps; g_gy = p.gy_dps; g_gz = p.gz_dps;
+}   // BMI/ATT USB lines are emitted from task_stream, off the sample path
 
-    L().print(F("BMI,"));
-    L().print(p.ax_g, 4);   L().print(',');
-    L().print(p.ay_g, 4);   L().print(',');
-    L().print(p.az_g, 4);   L().print(',');
-    L().print(p.gx_dps, 2); L().print(',');
-    L().print(p.gy_dps, 2); L().print(',');
-    L().println(p.gz_dps, 2);
-}
-
-void task_att_out()   // 20 Hz
+void task_stream()   // 20 Hz -- all the high-rate USB echo, off the control path
 {
-    if (!s_bmi_ready) return;
+    // IMU (bias-corrected, filtered)
+    L().print(F("BMI,"));
+    L().print(g_ax, 4);   L().print(',');
+    L().print(g_ay, 4);   L().print(',');
+    L().print(g_az, 4);   L().print(',');
+    L().print(g_gx, 2);   L().print(',');
+    L().print(g_gy, 2);   L().print(',');
+    L().println(g_gz, 2);
+
+    // attitude
     L().print(F("ATT,"));
     L().print(ahrs::roll_rad()  * kRadToDeg, 1); L().print(',');
     L().print(ahrs::pitch_rad() * kRadToDeg, 1); L().print(',');
     L().println(ahrs::yaw_rad() * kRadToDeg, 1);
+
+    // servo / ESC outputs
+    L().print(F("OUT"));
+    for (int i = 0; i < 8; i++) { L().print(','); L().print(s_out_us[i]); }
+    L().println();
+
+    // RC channels (10 Hz -- every other call)
+    static bool rc_toggle = false;
+    rc_toggle = !rc_toggle;
+    if (rc_toggle && crsf::receiving()) {
+        const crsf::Channels& ch = crsf::channels();
+        L().print(F("RC"));
+        for (int i = 0; i < 16; i++) { L().print(','); L().print(ch.us[i]); }
+        L().println();
+    }
 }
 
 void task_bmp()   // 50 Hz -- driver self-gates the ~10 Hz trigger/collect
@@ -463,17 +449,24 @@ void task_log()   // 50 Hz -- pack one binary frame into the ring (non-blocking)
     s_log_ring.push(&f, sizeof(f));   // drops + counts if the ring is full
 }
 
-void task_log_flush()   // 25 Hz -- drain 512-byte sectors to SD (blocking lives here)
+void task_log_flush()   // 25 Hz -- drain 512-byte sectors to SD; blocking lives here
 {
     sd_bin_log::flush_step();
+
+    // commit the FAT / directory entry every ~2 s -- f_sync() is blocking, so it
+    // stays inside this isolated SD task, never in task_debug on the loop.
+    static uint32_t l_sync = 0;
+    const uint32_t now = millis();
+    if ((now - l_sync) >= 2000) { l_sync = now; sd_bin_log::sync(); }
 }
 
-void task_debug()   // 2 Hz -- the low-rate GPS/SD debug lines keep their gates
+void task_debug()   // 2 Hz -- low-rate status lines (no blocking calls here)
 {
     const uint32_t now = millis();
+    const bool bringup = now < 25000;   // GPS bring-up dumps only for the first 25 s
 
     static uint32_t l_dbg = 0;
-    if ((now - l_dbg) >= 2000) {
+    if (bringup && (now - l_dbg) >= 2000) {
         l_dbg = now;
         L().print(F("GPS_DBG,"));
         L().print(ublox::rx_bytes());     L().print(',');
@@ -482,7 +475,7 @@ void task_debug()   // 2 Hz -- the low-rate GPS/SD debug lines keep their gates
     }
 
     static uint32_t l_first = 0;
-    if ((now - l_first) >= 3000) {
+    if (bringup && (now - l_first) >= 3000) {
         l_first = now;
         const uint8_t* boot = nullptr;
         const uint16_t boot_len = ublox::boot_capture(boot);
@@ -497,16 +490,25 @@ void task_debug()   // 2 Hz -- the low-rate GPS/SD debug lines keep their gates
     }
 
     static uint32_t l_raw = 0;
-    if (ublox::nmea_valid() && (now - l_raw) >= 1000) {
+    if (bringup && ublox::nmea_valid() && (now - l_raw) >= 1000) {
         l_raw = now;
         L().print(F("GPS_RAW,"));
         L().println(ublox::last_nmea());
     }
 
+    static uint32_t l_link = 0;
+    if (crsf::receiving() && (now - l_link) >= 500) {
+        l_link = now;
+        const crsf::LinkStats& lk = crsf::link();
+        L().print(F("LINK,up_rssi_dbm=")); L().print(lk.up_rssi_dbm);
+        L().print(F(",up_lq="));           L().print(lk.up_lq);
+        L().print(F(",up_snr="));          L().print(lk.up_snr);
+        L().print(F(",rf_mode="));         L().println(lk.rf_mode);
+    }
+
     static uint32_t l_sd = 0;
     if ((now - l_sd) >= 5000) {
-        l_sd = now;
-        sd_bin_log::sync();                          // commit FAT/dir, ~5 s cadence
+        l_sd = now;                                  // f_sync() now lives in task_log_flush
         L().print(F("SD_DBG,"));
         L().print(sd_bin_log::ok() ? 1 : 0);         L().print(F(","));
         L().print(sd_bin_log::name());               L().print(F(",bytes="));
@@ -560,7 +562,8 @@ void task_sched_report()   // 1 Hz -- per-task DWT timing + overruns
     for (size_t i = 0; i < sched::task_count(); i++) {
         if (!sched::get_stats(i, st)) continue;
         L().print(F("SCHED,"));      L().print(st.name);
-        L().print(F(",hz="));        L().print(st.rate_hz);
+        L().print(st.critical ? F("*,hz=") : F(",hz="));
+        L().print(st.rate_hz);
         L().print(F(",min_us="));    L().print(st.min_us);
         L().print(F(",mean_us="));   L().print(st.mean_us);
         L().print(F(",max_us="));    L().print(st.max_us);
@@ -569,6 +572,31 @@ void task_sched_report()   // 1 Hz -- per-task DWT timing + overruns
     }
     L().print(F("SCHED,_loop,passes="));   L().print(sched::loop_count());
     L().print(F(",worst_pass_us="));       L().println(sched::worst_pass_us());
+}
+
+// Bench command reader over USB CDC. Newline-terminated tokens:
+//   RESET_STATS  -- zero the scheduler counters for a clean measurement window
+//   REBOOT_BL    -- jump to the STM32 system bootloader (DFU) without the button
+void task_cmd()   // 10 Hz
+{
+    static char buf[24];
+    static uint8_t len = 0;
+    for (int guard = 0; guard < 128; guard++) {   // bounded drain
+        const int c = usb_stream::read();
+        if (c < 0) break;
+        if (c == '\r') continue;
+        if (c == '\n') {
+            buf[len] = 0;
+            if      (!strcmp(buf, "RESET_STATS")) { sched::reset_stats(); L().println(F("ACK,RESET_STATS")); }
+            else if (!strcmp(buf, "REBOOT_BL"))   { L().println(F("ACK,REBOOT_BL")); hal::delay_ms(50); hal::jump_to_bootloader(); }
+            else if (len)                         { L().print(F("NAK,")); L().println(buf); }
+            len = 0;
+        } else if (len < sizeof(buf) - 1) {
+            buf[len++] = (char)c;
+        } else {
+            len = 0;   // overflow -> drop the line
+        }
+    }
 }
 
 } // namespace
@@ -592,11 +620,20 @@ void setup()
     s_log = &usb_stream::log();
     L().println(F("boot: BMP581 + BMI323 + uBlox + CRSF + SD (scheduled) -- MANUAL"));
 
-    // IMU preconditioning: 100 Hz sample, gentle LPF (Nyquist is 50 Hz until
-    // the FIFO/1 kHz path lands). Gyro bias calibrates on the first stationary
-    // window; keep the board still for the first few seconds after boot.
-    s_imu_prep.configure(100.0f, 30.0f, 15.0f);
+    // IMU preconditioning: 200 Hz sample (== AHRS rate, half the SPI load of
+    // matching the 400 Hz rate loop; FIFO decimation to ~1 kHz is the next
+    // step). 30/15 Hz gyro/accel LPF. Gyro bias calibrates over a 4 s
+    // stationary window -- keep the board still for the first few seconds.
+    s_imu_prep.configure(200.0f, 30.0f, 15.0f, 4.0f);
     ahrs::reset();
+
+    // Bring the IMU up here (bounded), not from a scheduler pass -- the Bosch
+    // re-init is ~ms of blocking. task_bmi_probe handles a later hot-plug.
+    for (int i = 0; i < 4 && !s_bmi_ready; i++) {
+        s_bmi_ready = bmi323::begin();
+        if (!s_bmi_ready) hal::delay_ms(40);
+    }
+    L().println(s_bmi_ready ? F("BMI_STATUS,1") : F("BMI_STATUS,0"));
 
     // ASSIST (FBWA): stick -> clamped attitude angle -> rate loop -> mixer.
     // Rough first gains, verified only in SITL (--assist-check) -- FF-dominant
@@ -631,19 +668,23 @@ void setup()
             L().println(F("SD_STATUS,0,begin_failed")); break;
     }
 
-    // Register order matters: producers before consumers within a pass
-    // (bmi writes g_*/ahrs, then att_out and sd_log read them).
+    // Critical chain first (marked *): it runs at the top of every pass and is
+    // re-serviced after any slow non-critical task, so the logger / debug
+    // prints / a slow SD write cannot stall the rate loop. bmi writes g_*/ahrs
+    // before control reads them.
+    sched::add("bmi",      200, task_bmi,     /*critical=*/true);
+    sched::add("control",  400, task_control, /*critical=*/true);
+
+    sched::add("crsf",     100, task_crsf);       // RC parse (no USB echo here)
     sched::add("gps",       50, task_gps);
-    sched::add("crsf",     100, task_crsf);
-    sched::add("crsf_tx",   10, task_crsf_tx);   // FC -> handset telemetry
-    sched::add("bmi_retry",  1, task_bmi_retry);
-    sched::add("bmi",      100, task_bmi);
-    sched::add("control",  400, task_control);
-    sched::add("att",       20, task_att_out);
+    sched::add("crsf_tx",   10, task_crsf_tx);    // FC -> handset telemetry
+    sched::add("bmi_probe",  2, task_bmi_probe);  // cheap IMU hot-plug poll
     sched::add("bmp",       50, task_bmp);
     sched::add("log",       50, task_log);        // pack frame -> ring (fast)
-    sched::add("log_flush", 25, task_log_flush);  // ring -> SD (blocking, isolated)
-    sched::add("debug",      2, task_debug);
+    sched::add("log_flush", 25, task_log_flush);  // ring -> SD + f_sync (blocking, isolated)
+    sched::add("stream",    20, task_stream);     // BMI/ATT/OUT/RC USB echo
+    sched::add("cmd",       10, task_cmd);        // USB bench commands
+    sched::add("debug",      2, task_debug);      // low-rate status lines
     sched::add("sched",      1, task_sched_report);
 
     // IWDG stays off until MANUAL exists to fall back into on a watchdog reset.
