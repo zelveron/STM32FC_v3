@@ -1,40 +1,54 @@
-# STM32FC — Fixed-Wing Flight Controller
+# STM32FC_v2 — Fixed-Wing Flight Controller
 
 Firmware and host tools for a custom **STM32F407VET6** flight controller board,
 built to fly a **1.5 m 3D-printed twin-EDF Boeing 787** model aircraft.
 
+Repo: `github.com/zelveron/STM32FC_v2` (branch `main`).
+
 > **This README is written for future AI coding agents as much as for humans.**
 > It records every gotcha learned the hard way — marginal solder joints, DFU
-> quirks, sensor protocol traps, vendored-library patches. Read
+> quirks, sensor protocol traps, vendored-library patches, host-USB bugs. Read
 > [Known issues](#known-issues--lessons) before touching code.
-> See `CLAUDE.md` for architecture rules and hard constraints.
+> See `CLAUDE.md` for architecture rules and hard constraints, and
+> `docs/DECISIONS.md` for the reasoning behind every design choice (append-only).
 
 ---
 
 ## Project status
 
-**Today the firmware is a working sensor streamer, not a flight controller.**
-It reads three sensors, streams tagged CSV over USB CDC, logs to SD, and drives
-a tkinter GUI on a Raspberry Pi 5. Everything below the "Flight controller" line
-is not yet built.
+The project started as a **sensor streamer** and has been converted, in the
+CLAUDE.md-mandated order, into a working flight controller. MANUAL mode has been
+flown / bench-verified on hardware; ASSIST and TKOFF are built and verified in
+SITL but **not yet flight-tested**. Position estimation and AUTO are not started.
 
-| Capability | Status |
+| Area | Status |
 |---|---|
-| BMI323 IMU read | working — **bit-bang SPI only, see blocker #1** |
-| BMP581 pressure/temp/altitude | working |
-| u-blox GNSS | working (NMEA @ 9600) — no fix indoors |
-| SD logging | working (CSV @ 50 Hz) |
-| USB CDC + GUI | working — **bench scaffolding, removed before flight** |
-| — *flight controller* — | |
-| CRSF RC input | not started |
-| Servo / ESC PWM output | not started |
-| Scheduler, params, binary log | not started |
-| Attitude estimation (flight-grade) | basic roll/pitch/yaw exists, **not flight-grade** |
-| MANUAL / ASSIST / AUTO modes | not started |
+| BMI323 IMU | **hardware SPI1** ~5.25 MHz, DRDY-gated, ±8 g / 2000 dps, sampled 200 Hz |
+| BMP581 baro | I²C1, non-blocking poll @ 50 Hz, ground-referenced AGL + climb rate |
+| u-blox NEO-7M | NMEA @ 9600, 1 Hz, auto-baud (UBX/5 Hz is Phase 5) |
+| CRSF RC input | ER8 on USART3, 420000 8N1, 16-ch + link stats |
+| CRSF telemetry out | attitude / vario / GPS / flight-mode → TX16S |
+| Servo / ESC PWM | 8 channels, TIM4 + TIM1, 333 Hz |
+| Cooperative scheduler | fixed task table, critical-priority, per-task DWT timing, `worst_pass ≈ 15 ms` |
+| Binary SD log | `FLTxxxxx.BIN`, 16 KB ring, CRC-16 framed, ~50 Hz |
+| Estimation | quaternion gated-Mahony AHRS, gyro-bias cal, baro ground ref |
+| Control | anti-windup PID → rate loop → angle loop → mixer, turn compensation |
+| MANUAL mode | **flown / bench-verified** — passthrough, arming, failsafe, mode-req |
+| ASSIST mode (FBWA) | built, SITL-verified (`--assist-check`), **not flight-tested** |
+| TKOFF mode | built, SITL-verified (`--takeoff`), **not flight-tested** |
+| SITL 6DOF sim | `[env:sitl]`, self-checking (`--check` / `--assist-check` / `--takeoff`) |
+| Native unit tests | `[env:native]`, 80+ assertions |
+| Host tools | `gui.py` monitor, `plot_log.py` flight-log plotter, `parse_bin_log.py` |
+| — *not started* — | |
+| Sensor axis → body-frame verification | **mandatory before an ASSIST/TKOFF flight** |
+| `core/params` flash parameter store | blocks in-flight tuning + accel cal |
+| 6-point accel calibration | needs `core/params` |
+| UBX-NAV-PVT parser, nav filter, TECS, L1, AUTO | Phase 5+ |
+| Non-blocking SD write path | the one thing keeping the loop from hard-real-time |
+| Hard-fault handler → RTC backup regs | a crash is currently a silent reboot |
 
-Removed since the streamer era: the **ALS31300 Hall sensor** (see
-[Known issues](#known-issues--lessons)) and all sensor **enable-pin** GPIO
-(no sensor has a power-gate line; everything is always on).
+Removed since the streamer era: the **ALS31300 Hall sensor** and all sensor
+**enable-pin** GPIO (no sensor has a power-gate line; everything is always on).
 
 ---
 
@@ -51,19 +65,25 @@ Removed since the streamer era: the **ALS31300 Hall sensor** (see
 Selected by one three-position transmitter channel (ch7): **low = MANUAL,
 mid = ASSIST, high = TKOFF**.
 
-1. **MANUAL** — direct passthrough. Must work even if the IMU has faulted.
-2. **ASSIST** — IMU roll/pitch angle stabilisation with angle limits
-   (equivalent to ArduPlane FBWA / Spektrum SAFE). Roll ±40°, pitch ±26°.
-3. **TKOFF** — roll wing-leveller only (stick → ±10° bank, crosswind wing-low only), **pitch / yaw /
-   throttle fully manual**, so nothing fights the elevator during rotation and
-   climb-out. Take off in TKOFF, then switch down to ASSIST once settled.
+1. **MANUAL** — direct passthrough. Must work even if the IMU has faulted. The
+   fallback for anything that goes wrong.
+2. **ASSIST** — FBWA: stick commands a clamped attitude *angle* (roll ±40°,
+   pitch ±26°), angle loop → rate loop → mixer. Turn-compensation pitch-up FF
+   while banked. Centre stick = wings level, hold level pitch.
+3. **TKOFF** — roll wing-leveller only (stick → ±10° bank, for a crosswind
+   wing-low), **pitch / yaw / throttle fully manual** so nothing fights the
+   elevator during rotation and climb-out. Take off in TKOFF, then drop to
+   ASSIST once settled.
 4. **AUTO** — IMU + GPS + baro. Altitude and track hold first, then loiter,
-   then waypoints and RTL. *Not built; no switch slot yet.*
+   then waypoints and RTL. *Not built; no switch slot yet (TKOFF took the
+   high position).*
 
-The stabilised modes (ASSIST, TKOFF) engage only on the pilot's switch and only
-after the gyro-bias cal completes. Sensor faults demote downward (AUTO →
-ASSIST → MANUAL), never upward, latched for the flight, and announced over CRSF
-telemetry (`FM` shows `!LOCK`).
+The stabilised modes (ASSIST, TKOFF) engage only on the pilot's switch, only
+after the gyro-bias cal completes, and their rate-loop integrators only run once
+"flying" is latched (armed **and** throttle > 75 % **or** GPS speed > 8 m/s —
+so they never wind against a stationary airframe). Sensor faults demote
+downward (AUTO → ASSIST → MANUAL), never upward, latched for the flight, and
+announced over CRSF telemetry (`FM` shows `!LOCK`).
 
 ---
 
@@ -71,16 +91,12 @@ telemetry (`FM` shows `!LOCK`).
 
 | Device | Signal | STM32 pin | Notes |
 |---|---|---|---|
-| BMI323 | SCK | PA5 | SPI mode 0, currently bit-bang (~200 kHz) |
-| BMI323 | SDO/MISO | PA6 | |
-| BMI323 | SDI/MOSI | PA7 | |
-| BMI323 | CS | PA4 | |
-| BMP581 | SCL | PB6 | I2C1 |
-| BMP581 | SDA | PB7 | I2C1, 7-bit addr **0x47** |
-| u-blox | TX (MCU) | PA9 | USART1_TX — PA9 is **TX-only** on F407 |
-| u-blox | RX (MCU) | PA10 | USART1_RX — PA10 is **RX-only** |
-| SD card | D0..D3, CK, CMD | PC8..PC12, PD2 | SDIO |
-| USB CDC | D+/D− | PA12/PA11 | native USB, `SerialUSB` |
+| BMI323 | SCK / MISO / MOSI / CS | PA5 / PA6 / PA7 / PA4 | SPI1, mode 0, ~5.25 MHz, blocking, DRDY-gated |
+| BMP581 | SCL / SDA | PB6 / PB7 | I²C1, 7-bit addr **0x47** |
+| u-blox | TX (MCU) / RX (MCU) | PA9 / PA10 | USART1 — PA9 is **TX-only**, PA10 **RX-only** (see #4) |
+| CRSF RX | RX (MCU) / TX (MCU) | PB11 / PB10 | USART3, 420000 8N1, full-duplex (RC in + telem out) |
+| SD card | D0..D3, CK, CMD | PC8..PC12, PD2 | SDIO, 1-bit @ 4 MHz (see #2) |
+| USB CDC | D+ / D− | PA12 / PA11 | native USB, `SerialUSB` |
 
 No device has an enable/power pin. All sensors are powered from the board
 regulators and are always on.
@@ -91,99 +107,145 @@ regulators and are always on.
 |---|---|
 | Servo/ESC 1–4 | TIM4 CH1–4 — PD12, PD13, PD14, PD15 |
 | Servo/ESC 5–8 | TIM1 CH1–4 — PE9, PE11, PE13, PE14 |
-| CRSF | USART2 (PA2/PA3), fallback USART3 (PB10/PB11) |
+| CRSF | USART3 (PB10/PB11) — **wired here**; USART2 (PA2/PA3) is the documented alt |
 
 **Output channel map:** 1 aileron L · 2 aileron R · 3 elevator L ·
-4 elevator R · 5 rudder · 6 nosewheel · 7 ESC L · 8 ESC R.
+4 elevator R · 5 rudder · 6 nosewheel · 7 ESC L · 8 ESC R. Left/right surface
+opposition is a per-channel `SrvChannel.reversed` flag; the mixer sends both
+sides the same signed command.
 
-The nosewheel gets its own channel. It is **not** mechanically Y-cabled to the
-rudder — it needs a separate gain, a gain that falls off with ground speed, and
-full centring once airborne.
+The nosewheel gets its own channel (**not** Y-cabled to the rudder) — separate
+gain, falls off with ground speed, centred once airborne (falloff/centring TBD).
 
-Servos should run at **200–333 Hz**, not 50 Hz, driven from timer compare
-registers directly. Do not use `analogWrite`.
-
----
-
-## Blockers before flight code
-
-### 1. ~~BMI323 bit-bang SPI~~ — moved to hardware SPI
-
-**History:** the BMI323's solder joints were marginal — hardware SPI failed
-(chip ID `0xFF`), so the driver bit-banged SPI at ~200 kHz. One accel+gyro
-read cost **~1.4 ms of blocking CPU** (measured), which caps sampling at
-~700 Hz and burns 70–98% of the core. Disqualifying for flight.
-
-**Now:** after solder rework, the `imu_probe` firmware verified hardware SPI
-at 10 MHz: **0 chip-ID errors and 0 comm failures over 1.4 million reads**.
-The link is solid. (A residual ~0.04% of samples showed large accel deltas —
-that is register *tearing* from the probe polling 8× faster than the ODR with
-no data-ready gate, not a bus fault: chip-ID on the same wire was perfect, the
-rate was flat across 1/4/8/10 MHz, and the rework didn't change it.)
-
-`src/drivers/bmi323.cpp` now uses **SPI1 (PA5/6/7), CS PA4, ~5.25 MHz,
-blocking** — a 28-byte burst is ~45 µs. Reads are **data-ready gated** so there
-is no tearing. Config: 1600 Hz ODR both sensors, internal filter on, ±8 g accel,
-2000 dps gyro, high-perf mode. Bit-bang code and `hal::gpio` bus shim are
-deleted.
-
-**Still to do:** FIFO + DMA (`hal::spi_xfer_async`) to take the read cost from
-~45 µs to ~1 µs and decouple it from the ODR; a raw-sample spike filter.
-Hardware-flash verification of this driver is pending (build is green).
-
-### 2. Sampling rates are datalogger rates
-
-| Sensor | Current | Target | Why |
-|---|---|---|---|
-| BMI323 | 200 Hz ODR, ~100 Hz sampled | **≥1.6 kHz ODR, internal filter ON, FIFO + DMA, decimate to 1 kHz** | Two EDFs at 30–45k RPM put energy above 1 kHz. Sampling slower **aliases** it down into the control band as phantom motion the PIDs will chase. |
-| BMI323 accel | ±4 g | **±8 g or ±16 g** | Launch, gusts and landing clip ±4 g, corrupting attitude exactly when it matters. |
-| BMP581 | ~10 Hz | **≥50 Hz** | Climb rate is d(altitude)/dt. 10 Hz gives an unusably laggy derivative. |
-| u-blox | NMEA 9600, 1 Hz | **UBX binary, 115200, 5 Hz, `UBX-NAV-PVT`** | One message gives position, NED velocity, fix type, sats and accuracy. NED velocity is what the nav filter needs. |
-| SD log | CSV, 50 Hz, 1-bit @ 4 MHz | **binary, ring buffer, 512-byte aligned, 4-bit** | `sprintf` of 15 floats costs hundreds of µs. First flights need raw gyro at 500–1000 Hz for FFT. |
-
-### 3. ~~Everything lives in one file~~ — done
-
-`src/main.cpp` has been split into the `CLAUDE.md` layered layout: `hal/`
-(interface + `stm32/` and `native/` backends), `drivers/` (bmi323, bmp581,
-ublox), `estimation/ahrs`, `core/` (bench `usb_stream` + `sd_csv_log`),
-`main_stm32.cpp`. `[env:native]` builds the portable layers. The bit-bang IMU
-transfer still blocks (blocker #1) — the split does not change that.
+Servos run at **333 Hz** from timer compare registers (`HardwareTimer`), not
+`analogWrite`.
 
 ---
 
-## Debugging without a debugger
+## Firmware architecture
 
-There is **no ST-Link / SWD** on this project. Flashing is USB DFU; the only
-debug channel is USB CDC. Three consequences shape every design:
+Layered, per `CLAUDE.md`. Everything except `hal/stm32/` and the two bench
+files compiles on the desktop (`[env:native]`), which is what lets an agent
+verify its own changes.
 
-1. **All logging must be non-blocking.** `SerialUSB.write()` on the STM32
-   Arduino core spins up to `USB_CDC_TRANSMIT_TIMEOUT` (3 ms) per call when the
-   host is connected but not draining, and can emit torn lines. Every USB write
-   goes through a bounded wrapper that drops whole lines when the queue is full
-   and never spins.
-2. **Software jump to the DFU bootloader** — a CDC command that jumps to system
-   memory, so BOOT0 does not have to be toggled by hand every flash cycle.
-   *(planned — early task)*
-3. **Hard fault handler that survives reset** — stash the stacked PC, LR and the
-   CFSR/HFSR into RTC backup registers, print them on the next boot. Without
-   this a crash is a silent reboot. *(planned — early task)*
-
----
-
-## Build
-
-```bash
-cd ~/Desktop/STM32FC_Claude
-pio run
+```
+src/
+  hal/            hardware abstraction — the ONLY layer touching STM32/Arduino
+    hal.hpp         interface implemented by both backends
+    stm32/          real hardware (may call HAL_*/LL_* directly)
+    native/         desktop backend for tests and SITL
+  drivers/        bmi323, bmp581, ublox, crsf         (depend on hal only)
+  estimation/     ahrs (gated Mahony), imu_prep (bias cal + LPF), baro_alt
+  control/        pid, rate_ctrl, attitude_ctrl, mixer, rc_channel, srv_channel
+  modes/          mode.hpp + mode_manual, mode_assist, mode_takeoff
+  core/           scheduler, failsafe, arming, log_ring, log_frame, sd_bin_log
+                  + usb_stream  (BENCH scaffolding, Arduino-coupled — deleted with USB)
+  sitl/           aircraft (6DOF), sensors (synthetic)
+  main_stm32.cpp  composition root: brings up hal+drivers+estimation, registers
+                  the scheduler tasks, wires the mode manager, runs sched::run()
+  main_native.cpp [env:native] entry — smoke test + all unit assertions
+  main_sitl.cpp   [env:sitl] entry — real control chain vs the 6DOF model
 ```
 
-Board `black_f407ve`, framework Arduino (`Arduino_Core_STM32`), USB CDC enabled
-via `-D PIO_FRAMEWORK_ARDUINO_ENABLE_CDC`.
-Output: `.pio/build/black_f407ve/firmware.bin`.
+### Build envs (`platformio.ini`)
 
-We stay on the Arduino framework for now. It sits on top of STM32Cube HAL, so
-timing-critical drivers can call `HAL_*` / `LL_*` directly without throwing away
-the working vendored SD stack.
+| Env | Purpose |
+|---|---|
+| `black_f407ve` | the firmware (DFU upload) |
+| `native` | portable-layer unit tests — proves `core/`/`estimation/`/`control/`/`modes/` stay Arduino-free |
+| `sitl` | desktop 6DOF simulator |
+| `crsf_probe`, `imu_probe` | diagnostic firmwares (not flight) |
+
+```bash
+pio run   -e black_f407ve            # cross build  -> .pio/build/black_f407ve/firmware.bin
+pio run   -e native  && .pio/build/native/program        # unit tests + smoke
+pio run   -e sitl                                         # build the simulator
+.pio/build/sitl/program --check          # trim + control signs + no-departure
+.pio/build/sitl/program --assist-check    # ASSIST holds/returns/no-oscillation/bumpless
+.pio/build/sitl/program --takeoff         # TKOFF: roll levelled, pitch passes through
+```
+
+**Before claiming a change works: build it and run the checks, and paste the
+real output.** For control changes, show the SITL trace.
+
+---
+
+## Scheduler
+
+Single-threaded cooperative, no RTOS. Fixed task table; each pass runs every due
+task once. `bmi` and `control` are **critical** — dispatched at the top of every
+pass and re-serviced immediately after any non-critical task that ran > 500 µs,
+so a slow logger/debug/SD write delays the rate loop by at most one such task,
+not the sum. Per-task min/mean/max runtime and an overrun count via the DWT
+cycle counter, streamed on a 1 Hz `SCHED,` line.
+
+| Hz | Task |
+|---|---|
+| 400 | `control` — CRSF → arming/failsafe → mode manager → mixer → PWM |
+| 200 | `bmi` — IMU read, `imu_prep` (bias-correct + LPF), AHRS update |
+| 100 | `crsf` — drain USART3, parse |
+| 50 | `gps`, `bmp`, `log` (pack a frame into the ring) |
+| 20 | `stream` — the USB tagged-CSV echo |
+| 10 | `crsf_tx` (telemetry), `cmd` (USB console) |
+| 5 | `log_flush` — ring → SD (blocking lives here, isolated) |
+| 2 | `debug` — low-rate GPS/SD/EST/MODE lines |
+| 1 | `bmi_probe`, `sched` (the SCHED report) |
+
+Measured `worst_pass_us ≈ 15 ms`, entirely one blocking SD sector write (see
+#10). Everything else per task is < 1.1 ms. IWDG support exists
+(`sched::set_watchdog_ms`) but is **not yet enabled** — it turns on once the
+watchdog-reset path latches MANUAL.
+
+---
+
+## Estimation
+
+- **AHRS** (`estimation/ahrs`) — quaternion **gated complementary filter**
+  (Mahony explicit, `Kp = 1.0`, `Ki = 0.05`). The accel correction is weighted
+  by a magnitude gate (`|a|` within 0.05 g of 1 g) **and** a body-rate gate
+  (full trust < 5 dps, zero > 25 dps): a coordinated turn sits near 1 g so the
+  magnitude gate alone won't reject it, and without centripetal compensation
+  the accel drags the estimate toward level — so it coasts on the gyro whenever
+  it's rotating. **Known limit:** sustained-turn bank still under-reads a few
+  degrees; the fix is GPS-velocity centripetal compensation with the Phase-5
+  nav filter.
+- **No magnetometer.** Yaw is gyro-integrated (relative to power-on), drifts
+  slowly, **is not a compass**. A GPS-aided heading comes with Phase 5.
+- **Gyro-bias calibration** (`estimation/imu_prep`) — accumulates from boot,
+  completes after ~4 s of the gyro span staying under a threshold. On the
+  rising edge of `bias_ready`, while disarmed, a **control-surface sweep**
+  (aileron → elevator → rudder) tells the pilot the cal is done without a
+  screen.
+- **Baro altitude** (`estimation/baro_alt`) — ground pressure latched while
+  disarmed, frozen on arm; reports AGL. Climb rate is a 0.7 Hz-filtered dAGL/dt.
+
+---
+
+## Control
+
+- **`control/pid`** — feedforward + P + I + filtered D-on-measurement.
+  Anti-windup: integrator clamp `±i_max` plus a conditional freeze while the
+  output is railed in the same direction. `preset_integrator()` for bumpless
+  mode entry. `set_integrator_enabled()` freezes accumulation on the ground.
+- **`control/rate_ctrl`** — three axis PIDs on the gyro; normalized surface
+  command out.
+- **`control/attitude_ctrl`** — angle error → desired body rate (P, rate-
+  limited) + turn-compensation pitch-up FF `∝ tan(φ)·sin(φ)·g/V` while banked
+  (banking loses vertical lift; without this the nose drops every turn and I
+  fights it).
+- **`control/mixer`** — `mix_manual` maps roll/pitch/yaw/throttle to the 8
+  channels. Flaperon / differential-thrust / nosewheel-gain scaffolding present,
+  most gains at defaults.
+- **ASSIST** = stick → clamped angle → `attitude_ctrl` → `rate_ctrl` → mixer,
+  with a bumpless `enter()` preload and the flying-latch integrator gate.
+- **TKOFF** = the ASSIST roll loop only; pitch/yaw/throttle straight through the
+  mixer as MANUAL.
+- Airspeed for the turn-comp / (future) gain scheduling is a **GPS-ground-speed
+  proxy** floored at 10 m/s — no pitot yet, unreliable in wind.
+
+Gains are compile-time constants in `main_stm32.cpp setup()` (and the SITL
+config), **rough SITL values, un-flight-tuned**. `core/params` will make them
+adjustable without a reflash.
 
 ---
 
@@ -191,86 +253,29 @@ the working vendored SD stack.
 
 ### Recommended: ST-Link over SWD
 
-Get an ST-Link V2 (clones are ~€5). It gives real breakpoints and live variable
-watch through the **Cortex-Debug** VS Code extension, plus SWO/RTT printf that
-doesn't fight the USB CDC stream. This is the single best time investment in the
-whole project. *(not yet acquired — see "Recommended hardware additions")*
+An ST-Link V2 (clones ~€5) gives real breakpoints and live-variable watch via
+**Cortex-Debug**, plus SWO/RTT printf that doesn't fight the USB CDC stream.
+Single best time investment. *(not yet acquired)*
 
 ### Current: DFU (STM32 ROM bootloader)
 
-Flashes over USB DFU (`0483:df11`). **Enumeration is flaky on the Raspberry
-Pi** — `dfu-util -l` often shows nothing (kernel logs
-`device descriptor read/64, error -110`).
+Flashes over USB DFU (`0483:df11`). **Enumeration is flaky on the Raspberry Pi**
+— see #5.
 
 1. Set **BOOT0 = 1** and press **reset** (keep BOOT0 high) — or send `REBOOT_BL`
-   over the USB CDC console (no button needed; see below).
-2. If `dfu-util -l` is empty, unplug and replug USB while BOOT0 stays high.
-   Confirm the device shows `0483:df11`, not `0483:5740` (5740 = the running
-   app, meaning BOOT0 is not actually high).
-3. Flash:
-   ```bash
-   dfu-util -a 0 -s 0x08000000:leave -D .pio/build/black_f407ve/firmware.bin
-   ```
-4. Set **BOOT0 = 0** and press **reset** to run.
-
-**Pi xHCI gets stuck on the live re-enumeration.** A *cold* plug into DFU
-enumerates fine, but the CDC→DFU transition (`REBOOT_BL`, or any app→bootloader
-jump) reliably wedges the Pi port with `error -110`, and it stays wedged across
-replugs on that port. Unbinding/rebinding the `xhci-hcd.N` platform driver does
-**not** clear it. What works: move the board to a physical port on the *other*
-xHCI controller, or reboot the Pi. This is a Pi-host bug, not firmware.
+   over the USB CDC console (no button needed).
+2. If `dfu-util -l` is empty, unplug/replug while BOOT0 stays high. Confirm
+   `0483:df11`, not `0483:5740` (5740 = the running app).
+3. `pio run -e black_f407ve -t upload`  (or `dfu-util -a 0 -s 0x08000000:leave -D .pio/build/black_f407ve/firmware.bin`)
+4. Set **BOOT0 = 0** and reset to run.
 
 **USB CDC console commands** (newline-terminated, into `/dev/ttyACM0` @ 115200):
-`RESET_STATS` (zero the scheduler counters for a clean `SCHED` measurement),
-`REBOOT_BL` (jump to the DFU bootloader), `SIM_FLYING 0|1` (bench: force the
-`s_flying` latch to exercise the in-flight logging / integrator path).
 
----
-
-## Serial protocol (current — bench only)
-
-USB CDC, 115200 baud, tagged CSV. The GUI parses by leading tag. **This whole
-path is bench scaffolding and will be deleted once the restructure is
-validated.** The flying aircraft has no USB connection.
-
-```
-BMP,<pressure_hPa>,<temp_C>,<altitude_m>
-BMI,<acc_x>,<acc_y>,<acc_z>,<gyr_x>,<gyr_y>,<gyr_z>     (g, deg/s)
-ATT,<roll_deg>,<pitch_deg>,<yaw_deg>
-GPS_STAT,<fix>,<sats>,<time_HH:MM:SS>,<speed_kmh>       (1 Hz, even without fix)
-GPS,<lat>,<lon>,<alt_m>,<sats>,<fix>,<time>,<speed_kmh> (only with a fix)
-GPS_RAW,<last NMEA sentence>                            (1 Hz debug)
-GPS_DBG,<rx_bytes>,<baud>,<locked>                      (2 s debug)
-GPS_FIRST,<len>,<hex boot bytes>                        (3 s debug)
-BMI_STATUS,0|1   BMI_RAW,0xNN   BMP_STATUS,0|1
-SD_STATUS,1|<file>   SD_DBG,<ok>,<file>,<usb_log_drops>  (5 s debug)
-```
-
-`usb_log_drops` counts whole telemetry lines dropped because the USB host was
-not draining the CDC queue fast enough. Non-zero is expected when the GUI is
-busy; it means the drop-on-full logger did its job instead of stalling the
-loop.
-
-GPS speed comes from `$GxRMC` knots × 1.852 → km/h. GPS time is **UTC** from
-`$GxGGA` / `$GxRMC`.
-
-Flight telemetry to the pilot is a separate path: **CRSF** back to the TX16S so
-EdgeTX can announce mode, battery and GPS status audibly in the air.
-
----
-
-## GUI
-
-```bash
-python3 tools/gui.py                      # auto-detect /dev/ttyACM0
-python3 tools/gui.py --port /dev/ttyACM0
-```
-
-Sections: BMI323 status, BMP581 (p/t/alt), BMI323 (accel/gyro), u-blox GNSS
-(position/alt/sats/fix/time/speed), attitude (roll/pitch/yaw + artificial
-horizon). Auto-reconnects, has a data watchdog. *(the GUI still references an
-ALS/heading field that the firmware no longer emits — harmless, will be pruned
-with the rest of the bench tooling.)*
+| Command | Effect |
+|---|---|
+| `RESET_STATS` | zero the scheduler counters for a clean `SCHED` measurement window |
+| `REBOOT_BL` | jump to the DFU bootloader (no BOOT0 button) |
+| `SIM_FLYING 0\|1` | bench: force the `s_flying` latch to exercise the in-flight logging / integrator path |
 
 ---
 
@@ -279,8 +284,10 @@ with the rest of the bench tooling.)*
 SDIO, FatFs. Firmware writes **binary** `FLTxxxxx.BIN` (next free index each
 boot) — a 20-byte `LogFileHeader` (`STFC` + version + scales) then packed
 86-byte `LogFrame` records, each with magic `0x5AA5` and a trailing
-CRC-16/CCITT. Layout is defined once in `src/core/log_frame.hpp`. ~50 Hz, via
-an 16 KB SPSC ring drained by `task_log_flush`. No `sprintf` in the hot path.
+CRC-16/CCITT. Layout defined once in `src/core/log_frame.hpp`. ~50 Hz, via a
+16 KB SPSC ring drained by `task_log_flush` at 5 Hz (few large writes beat many
+small ones — see DECISIONS 2026-09-08). `f_sync` runs only on the ground. No
+`sprintf` in the hot path.
 
 Each frame carries: `t_ms`, accel[3] (g), gyro[3] (dps), attitude[3] (deg),
 `press_pa`, `temp`, baro AGL, GPS lat/lon/alt/speed/sats/fix, all 8 `rc_us`
@@ -292,17 +299,62 @@ Decode / plot on the PC:
 ```bash
 python3 tools/parse_bin_log.py FLT00007.BIN            # -> FLT00007.csv (real units)
 python3 tools/parse_bin_log.py FLT00007.BIN --summary  # frame count / Hz / CRC errors
-python3 tools/plot_log.py       FLT00007.BIN           # interactive: pick channels,
-                                                      #   Plot / Overlay / Grid, x = time (s)
+python3 tools/plot_log.py       FLT00007.BIN           # interactive: tree of channels,
+                                                      #   Plot / Overlay / Grid / normalize,
+                                                      #   x = time (s), zoom-pan-save toolbar
 ```
 
-`plot_log.py` needs `python3-matplotlib python3-numpy python3-tk` (apt). It
+`plot_log.py` needs `python3-matplotlib python3-numpy python3-tk` (apt) and
 also auto-writes the `.csv` next to the `.BIN` on open.
 
 Vendored `lib/STM32SD/` and `lib/FatFs/` contain critical fixes — **do not
-regenerate them from upstream** (see Known issues #2). The SD write path is
-still blocking (Known issues #10); it is the SD log that keeps the loop from
-being hard-real-time. Once USB is removed the SD log is the primary recorder.
+regenerate them from upstream** (see #2).
+
+---
+
+## CRSF telemetry (FC → handset)
+
+The flying aircraft has no USB; the pilot's picture of the FC comes back over
+the CRSF uplink. `task_crsf_tx` @ 10 Hz sends, gated on link-up:
+
+| CRSF frame | EdgeTX sensor(s) |
+|---|---|
+| `0x1E` attitude | `Ptch` `Roll` `Yaw` |
+| `0x07` vario | `VSpd` (from the baro climb rate) |
+| `0x02` GPS | `GPS` `GSpd` `Hdg`(0 for now) `GAlt` `Sats` |
+| `0x21` flight mode | `FM` — `MANUAL` / `ASSIST` / `TKOFF`, `*` disarmed, `!FS` failsafe, `!LOCK` IMU-fault demotion |
+| `0x08` battery | built but **not sent** — no pack-voltage sensor on the board yet |
+
+On the TX16S: set **ExpressLRS → Telem Ratio** to `Std`/`1:8` (not Off), then
+**Model → Telemetry → Discover new sensors**. Alarm on `RQly`. See the chat
+history / `docs/` for the full sensor glossary and screen setup.
+
+---
+
+## Serial protocol (bench only)
+
+USB CDC, 115200 baud, tagged CSV, parsed by leading tag. **Bench scaffolding —
+deleted once the aircraft flies on SD + CRSF only.** Tags include `BMI` `ATT`
+`BMP` `GPS`/`GPS_STAT` `EST` (bias/trust/AGL/climb) `MODE` (active/req/armed/
+failsafe/lockout/flying) `MODE_CHANGE` `OUT` `RC` `LINK` `CRSF_STAT` `SCHED`
+`CAL_DONE` `SD_STATUS`/`SD_DBG` `BMI_STATUS` `BMP_STATUS`. Exact field lists are
+in `src/main_stm32.cpp` (search the `F("...")` prints).
+
+`usb_log_drops` counts whole lines dropped because the host wasn't draining the
+CDC queue — non-zero is the drop-on-full logger doing its job instead of
+stalling the loop.
+
+---
+
+## Host tools (`tools/`)
+
+| Tool | What |
+|---|---|
+| `gui.py` | Tkinter monitor: BMP / BMI / GPS / attitude + artificial horizon, **Flight control** panel (mode, armed, failsafe, assist-lockout, stab-integrator, gyro-cal), **RC in / servo out**. Auto-reconnect, data watchdog. |
+| `plot_log.py` | interactive `.BIN` flight-log plotter (see SD logging). |
+| `parse_bin_log.py` | `.BIN` → CSV decoder; also a library (`decode()` / `write_csv()` / `FIELDS`). |
+| `capture.py` | raw CDC capture that survives USB re-enumeration. |
+| `imureader.py` | early IMU bring-up helper. |
 
 ---
 
@@ -310,129 +362,105 @@ being hard-real-time. Once USB is removed the SD log is the primary recorder.
 
 **Read this before coding. Do not "clean up" anything here without asking.**
 
-1. **BMI323 marginal solder → bit-bang SPI only.** See blocker #1 above. Reflow
-   VDD / VDDIO / GND / SDO before switching to hardware SPI.
+1. **BMI323 marginal solder — RESOLVED.** Hardware SPI once failed (chip ID
+   `0xFF`); after reflowing VDD/VDDIO/GND/SDO, `imu_probe` verified 10 MHz with
+   **0 errors over 1.4 M reads**. The driver now runs SPI1 at ~5.25 MHz,
+   blocking, DRDY-gated (a 28-byte burst is ~45 µs). A residual ~0.04 % of
+   over-polled samples showed register *tearing*, not a bus fault — fixed by
+   the data-ready gate. Still to do: FIFO + DMA to decouple the read from the
+   ODR and hit the ≥1 kHz target.
 2. **SD hang.** The stock STM32 HAL SD timeout was `100000000 ms` (≈27.8 h),
    which looked like an infinite hang. Fixed in vendored code:
    `lib/STM32SD/src/bsp_sd.h` — `SD_DATATIMEOUT` = 2000;
    `lib/STM32SD/src/bsp_sd.c` — `SD_CLK_DIV` = 10U (4 MHz), `SD_BUS_WIDE` = 1B.
    `lib/FatFs/` **must** keep its `ffsystem/` folder or the build fails.
-   *Note: 1-bit @ 4 MHz costs ~8× bandwidth. Revisit 4-bit mode once logging is
-   binary and DMA-driven.*
-3. **ALS31300 removed.** It used to live on PB8=SCL / PB9=SDA (software bit-bang
-   I2C, addr `0x60`). It is gone from the flight build and from the firmware:
-   its range is hundreds of gauss while Earth's field is ~0.5 G, so it cannot
-   serve as a magnetometer, and its bit-bang I2C blocked the loop. A mystery
-   device at 0x7E on that bus ACKed but ignored register commands — also gone.
-   PB8/PB9 are now free (they are I2C1's alternate pins; I2C1 itself is on
-   PB6/PB7 for the BMP581). Do not re-add the ALS.
-4. **u-blox must be crossed-wired** (module TX → PA10, module RX → PA9). USART1
-   has no remap on the F407: PA9 is TX-only, PA10 is RX-only. Wired straight
-   (TX→TX, RX→RX) the MCU receives nothing — proven by edge-counting both pins.
-   Without an antenna it still sends `$GPTXT` boot messages and 1 Hz NMEA with
-   an empty fix; time fills in as soon as any satellite is heard. Indoors you
-   may see `sats=0` forever.
-5. **DFU enumeration is flaky** — see Flash section. `:leave` makes the board run
-   the app immediately after flashing. The Pi xHCI also wedges (`error -110`) on
-   the CDC→DFU *live* transition and stays wedged on that port across replugs;
-   fix is a different physical port (other controller) or a Pi reboot — a
-   driver unbind/rebind does not clear it.
-6. **Serial capture contention.** `tools/gui.py` and any `cat /dev/ttyACM0` open
-   the same CDC port and split the stream. Kill the GUI before a clean `cat`
-   capture. `tools/capture.py` survives USB re-enumeration.
-7. **Boot prints are lost** unless the firmware waits for the USB host. `setup()`
-   has a bounded `while (!SerialUSB)` wait for exactly this reason.
-8. **GPS baud auto-detect** locks onto the first baud producing a
-   checksum-valid NMEA sentence — it does *not* wait for a satellite fix — then
-   stops cycling the 9 candidate bauds.
+   *1-bit @ 4 MHz costs ~8× bandwidth; revisit 4-bit + DMA later.*
+3. **ALS31300 removed.** It lived on PB8=SCL / PB9=SDA (bit-bang I²C, addr
+   `0x60`). Its range is hundreds of gauss vs Earth's ~0.5 G — useless as a
+   magnetometer — and its bit-bang I²C blocked the loop. A mystery device at
+   0x7E on that bus ACKed but ignored register commands — also gone. PB8/PB9 are
+   free now. Do not re-add it.
+4. **u-blox must be cross-wired** (module TX → PA10, module RX → PA9). USART1
+   has no remap on the F407: PA9 is TX-only, PA10 is RX-only. Wired straight the
+   MCU receives nothing. Without an antenna it still sends `$GPTXT` + 1 Hz NMEA
+   with an empty fix; indoors you may see `sats=0` forever.
+5. **DFU enumeration is flaky on the Pi.** `dfu-util -l` often shows nothing
+   (`device descriptor read/64, error -110`). A **cold** plug into DFU works;
+   the CDC→DFU **live** transition (`REBOOT_BL`, any app→bootloader jump)
+   reliably wedges the Pi port with `error -110` and stays wedged across
+   replugs on that port. Unbinding/rebinding `xhci-hcd.N` does **not** clear it.
+   What works: a different physical port on the *other* xHCI controller, or a Pi
+   reboot. Pi-host bug, not firmware. (`:leave` makes the board run the app
+   straight after flashing.) A marginal USB *cable* also produces `error -110` —
+   swap it if the problem follows the board across ports.
+6. **Serial capture contention.** `gui.py` and any `cat /dev/ttyACM0` open the
+   same CDC port and split the stream. Kill the GUI before a clean capture.
+   `capture.py` survives USB re-enumeration.
+7. **Boot prints are lost** unless the firmware waits for the USB host —
+   `setup()` has a bounded `while (!SerialUSB)` for exactly this.
+8. **GPS baud auto-detect** locks onto the first baud that yields a
+   checksum-valid NMEA sentence (it does *not* wait for a fix), then stops
+   cycling the 9 candidates.
 9. **No sensor enable pins.** Every sensor is always powered. The old firmware
-   drove PB11 / PE11 / PC14 as "enables"; those were removed (PB11 and PE11 are
-   reserved flight-I/O pins). Do not add sensor power-gate code.
-10. **SD writes are still blocking.** `disk_write` busy-waits on the card; the
-    fitted card returns most 512 B writes in 1-3 ms but occasionally stalls
-    ~14 ms on its flash-program cycle. This is the one thing keeping the 400 Hz
-    loop from being hard-real-time (`worst_pass_us` ~15 ms, rare, dt-corrected,
-    recovered by the scheduler's critical re-service). `task_log_flush` batches
-    to 1 Hz to minimise how often it hits. Real fix: a non-blocking SD write
-    path (`HAL_SD_GetCardState` polled per tick). A high-endurance / industrial
-    card also shrinks the tail. See `docs/DECISIONS.md` 2026-09-08.
+   drove PB11 / PE11 / PC14 as "enables"; removed (PB11/PE11 are reserved
+   flight-I/O). Do not add sensor power-gate code.
+10. **SD writes are still blocking.** `disk_write` busy-waits on the card; most
+    512 B writes return in 1–3 ms but occasionally stall ~14 ms on the card's
+    flash-program cycle. This is the one thing keeping the 400 Hz loop from
+    hard-real-time (`worst_pass_us ≈ 15 ms`, rare, dt-corrected, recovered by
+    the scheduler's critical re-service). `task_log_flush` batches to 5 Hz to
+    minimise how often it hits. Real fix: a non-blocking SD write path
+    (`HAL_SD_GetCardState` polled per tick). A high-endurance / industrial card
+    also shrinks the tail. See DECISIONS 2026-09-08.
 
 ---
 
 ## Roadmap
 
-Phases are ordered. Do not skip ahead — steps 1 and 5 of Phase 0 are the ones
-people skip and then spend months confused about why the aircraft oscillates.
+Phases are ordered. Steps that get skipped and then cause months of confusion
+are the vibration test and the axis-mapping verification.
 
-**Phase 0 — unblock**
-1. Reflow the BMI323, verify hardware SPI at 10 MHz with zero errors.
-2. Get ST-Link + Cortex-Debug working in VS Code.
-3. Split `main.cpp` into the `CLAUDE.md` layout, add `[env:native]`.
-4. Rewrite the BMI323 driver: hardware SPI, DMA, FIFO, ≥1.6 kHz ODR, ±8 g.
-5. **Vibration test.** Restrain the airframe, spool the EDFs to 50%, log raw
-   gyro at 1 kHz, FFT it. Do this *before* tuning a single gain — it tells you
-   whether you need soft mounting, better fan balancing, or a notch filter.
-6. CRSF driver: DMA circular RX + UART IDLE interrupt, generic frame parser,
-   link statistics, telemetry TX.
-7. Scheduler with per-task timing, binary logger, flash parameter store, IWDG.
-8. Software DFU-bootloader jump over CDC; hard-fault handler into RTC backup regs.
-9. Define and verify the sensor axis → body-frame mapping (CLAUDE.md).
+| Phase | Status |
+|---|---|
+| **0 — unblock** (hardware SPI, split, `[env:native]`, CRSF driver, scheduler, binary log) | **done** (except: ST-Link, IMU FIFO+DMA, DFU-jump ✔, hard-fault handler, **axis-mapping verification**, **vibration test**) |
+| **1 — estimation** (gyro-bias cal, gated AHRS, baro ground ref) | **done** (6-point accel cal + UBX parser deferred) |
+| **2 — MANUAL** (`RC_Channel`/`SRV_Channel`, mixer, arming, failsafe) | **done, flown** |
+| **3 — SITL** (6DOF, scripted sticks, self-checks) | **done** |
+| **4 — ASSIST + TKOFF** (PID, rate/angle loops, turn comp, bumpless, mode manager, CRSF telem) | **built, SITL-verified — not flight-tested** |
+| **4.5 — pre-flight** | axis-mapping verify · `core/params` · fly & tune ASSIST/TKOFF · hard-fault handler |
+| **5 — position** (UBX-NAV-PVT, GPS-aided heading, nav filter, AHRS centripetal comp) | not started |
+| **6 — AUTO cruise** (TECS, altitude + track hold) | not started |
+| **7 — AUTO nav** (L1, loiter, waypoints, RTL, geofence, mission GUI, landing) | not started |
 
-**Phase 1 — estimation.** Gyro bias calibration, 6-point accel calibration,
-anti-alias + low-pass filtering, complementary AHRS with accel gating, BMP581
-ground reference, UBX parser.
-
-**Phase 2 — manual mode.** `RC_Channel` / `SRV_Channel` abstractions, mixer with
-flaperon and differential-thrust scaffolding, arming state machine, basic
-failsafe. *Exit: flying through the FC in MANUAL feels identical to direct
-RX-to-servo.*
-
-**Phase 3 — SITL.** Desktop 6DOF model, scripted stick input, CSV state output.
-Build this early — it is what lets an AI agent verify its own changes instead of
-guessing.
-
-**Phase 4 — ASSIST.** PID library with anti-windup and D-term filtering, rate
-loops, angle loops with limits, turn compensation, sideslip damping, bumpless
-transitions, pilot override.
-
-**Phase 5 — position estimation.** Baro+accel vertical complementary filter,
-GPS+accel horizontal filter, per-sensor health monitoring.
-
-**Phase 6 — AUTO: cruise.** Altitude and ground-track hold, stick nudging.
-
-**Phase 7 — AUTO: navigation.** L1 guidance, loiter, waypoints, RTL.
-
-Realistic budget for Phases 0–6: **4–6 months of evenings.** That is normal.
+AUTO is gated on a **pitot** — see below.
 
 ---
 
 ## Recommended hardware additions
 
 1. **Pitot-static airspeed sensor** (DLVR-L05D or SDP33; MS4525DO is cheaper but
-   drifts). Biggest single improvement to auto-mode viability. Control gains
-   scale with dynamic pressure, and TECS needs a real minimum-airspeed floor to
-   keep the aircraft from stalling in a climbing turn. Mount the probe on the
-   nose or a wing boom, well clear of the EDF inlets.
-2. **ST-Link V2** — see Flash section.
+   drifts). Biggest single improvement to AUTO viability — control gains scale
+   with dynamic pressure and TECS needs a real minimum-airspeed floor. Mount the
+   probe clear of the EDF inlets. **AUTO work is deliberately deferred until
+   this is fitted.**
+2. **ST-Link V2** — see Flash.
 3. **Dedicated 6–8 A switching BEC for the servos.** Do **not** parallel the two
-   ESC BECs — cut one red wire, or better, both. Six servos on a jet this size
-   pull 5–8 A on a gust. Run the FC and receiver from a separate clean rail. A
-   brownout in ASSIST mode is a crash.
-4. **Soft-mount the FC** on vibration-damping gel or O-ring standoffs, and
-   **balance the EDF rotors**. Worth an evening.
-5. **GPS antenna placement.** Keep the module far from the two 120 A ESCs and
-   their battery leads — 240 A of switching noise destroys fix quality. Elevate
-   it, put a ground plane under it, twist the ESC power leads.
-6. Optional: upgrade to an **M9N/M10** GNSS module (10 Hz, multi-constellation)
-   and add a magnetometer (**RM3100** good, **IST8310** adequate) if you want a
-   pre-takeoff heading reference. Compass-less operation using GPS ground course
-   is acceptable for fixed-wing, but heading is only valid once moving and
-   crosswind means ground course ≠ heading.
+   ESC BECs — cut one (or both) red wires. Six servos on a jet this size pull
+   5–8 A on a gust; a brownout in a stabilised mode is a crash.
+4. **Soft-mount the FC** (gel / O-ring standoffs) and **balance the EDF rotors**.
+5. **GPS antenna placement** — far from the two 120 A ESCs and battery leads,
+   elevated, ground plane under it, twisted ESC power leads.
+6. Optional: **M9N/M10** GNSS (10 Hz, multi-constellation); a magnetometer
+   (**RM3100** > **IST8310**) only if a zero-speed heading reference is wanted —
+   GPS ground-course heading is acceptable for fixed-wing in forward flight.
+7. Optional: **high-endurance / industrial microSD** — shrinks the blocking
+   write tail (#10) from ~14 ms to ~2 ms with no code change.
 
 ---
 
 ## Git
 
-Remote: `https://github.com/zelveron/STM32FC` (branch `main`).
-Author identity `zelveron <zelveron@users.noreply.github.com>` is set
-repo-locally. Push with `git push origin main` — credentials are cached on the Pi.
+Remote: `https://github.com/zelveron/STM32FC_v2` (branch `main`). Author
+identity `zelveron <zelveron@users.noreply.github.com>` is set repo-locally.
+The older `github.com/zelveron/STM32FC` is the previous-generation reference
+codebase, not this project.
