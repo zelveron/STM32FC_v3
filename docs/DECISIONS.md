@@ -456,3 +456,9 @@ a takeoff; the only reason to command any bank is a crosswind wing-low, which
 never needs more than ~10 deg. 20 deg near the ground is a wingtip-strike /
 over-bank hazard for no benefit and makes an accidental roll-stick bump matter.
 `_max_roll` 0.35 -> 0.175 rad in `main_stm32`, SITL and the header default.
+
+**2026-09-09 - repo renamed STM32FC_Claude -> STM32FC_v2.** GitHub repo and
+git remotes (origin + claude both point at it now; main tracks origin/main).
+The local working dir is still ~/Desktop/STM32FC_Claude. The old
+github.com/zelveron/STM32FC is the prior-generation reference codebase, not
+this project. README rewritten to current state in the same commit.
