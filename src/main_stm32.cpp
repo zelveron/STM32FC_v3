@@ -679,8 +679,9 @@ void setup()
         tk_roll.i_max = 0.4f; tk_roll.d_lpf_hz = 25.0f;
         s_mode_takeoff.configure(tk_roll, 400.0f,
                                  110.0f,    // angle-P, dps per rad
-                                 120.0f,    // max roll rate, dps
-                                 0.35f);    // max bank, rad (~20 deg)
+                                 120.0f,    // max roll rate, dps (inactive at this bank cap)
+                                 0.175f);   // max bank, rad (~10 deg) -- crosswind wing-low
+                                            // only; you keep the stick centred on takeoff
     }
 
     // Servo / ESC PWM. SrvChannel defaults (1000/1500/2000) suit surfaces and,

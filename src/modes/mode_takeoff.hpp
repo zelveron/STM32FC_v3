@@ -44,7 +44,7 @@ private:
     control::Pid _roll_rate;
     float _roll_p       = 110.0f;
     float _max_rollrate = 120.0f;
-    float _max_roll     = 0.35f;    // ~20 deg
+    float _max_roll     = 0.175f;   // ~10 deg -- crosswind wing-low only
 
     bool             _need_preset = false;
     bool             _prev_allow  = true;

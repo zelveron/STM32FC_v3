@@ -450,3 +450,9 @@ is NOT held). `--check` / `--assist-check` unchanged; builds green all envs.
 Procedure: take off TKOFF, drop to ASSIST once settled, MANUAL is the bail-out.
 A full launch/TKOFF-with-climb-pitch mode (fixed climb attitude + abort) is
 still future work and needs the SITL ground model first.
+
+**2026-09-09 — TKOFF bank cap 20 deg -> 10 deg.** You keep the stick centred on
+a takeoff; the only reason to command any bank is a crosswind wing-low, which
+never needs more than ~10 deg. 20 deg near the ground is a wingtip-strike /
+over-bank hazard for no benefit and makes an accidental roll-stick bump matter.
+`_max_roll` 0.35 -> 0.175 rad in `main_stm32`, SITL and the header default.

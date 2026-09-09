@@ -102,7 +102,7 @@ int main(int argc, char** argv)
         rc.pitch = rc.roll;    rc.pitch.kff = 0.010f; rc.pitch.kp = 0.020f;
         rc.yaw   = rc.roll;    rc.yaw.kff  = 0.004f;  rc.yaw.kp  = 0.006f; rc.yaw.ki = 0.0f;
         mode_assist.configure(ac, rc, 0.70f, 0.45f, 80.0f);
-        mode_takeoff.configure(rc.roll, rc.sample_hz, 110.0f, 120.0f, 0.35f);
+        mode_takeoff.configure(rc.roll, rc.sample_hz, 110.0f, 120.0f, 0.175f);
     }
     modes::Mode* mode = takeoff ? static_cast<modes::Mode*>(&mode_takeoff)
                       : assist  ? static_cast<modes::Mode*>(&mode_assist)

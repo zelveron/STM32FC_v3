@@ -393,7 +393,7 @@ int main()
         modes::ModeTakeoff m;
         control::PidGains roll;
         roll.kff = 0.006f; roll.kp = 0.004f; roll.ki = 0.05f; roll.i_max = 0.6f;
-        m.configure(roll, 400.0f, 110.0f, 120.0f, 0.35f);   // max bank 0.35 rad
+        m.configure(roll, 400.0f, 110.0f, 120.0f, 0.175f);   // max bank ~10 deg
 
         // pitch / yaw are passthrough: out.ch[2..3] == pitch stick, ch[4] == yaw
         m.enter(control::Outputs{});
@@ -411,12 +411,12 @@ int main()
 
         // closed loop: hold roll stick right -> bank converges, capped by max_roll
         modes::ModeTakeoff m2;
-        m2.configure(roll, 400.0f, 110.0f, 120.0f, 0.35f);
+        m2.configure(roll, 400.0f, 110.0f, 120.0f, 0.175f);
         m2.enter(control::Outputs{});
         float rr = 0.0f, gp = 0.0f;
         for (int i = 0; i < 2000; i++) {
             modes::ModeInput in; in.dt_s = 0.0025f;
-            in.sticks = { 1.0f, 0.0f, 0.0f, 0.5f };   // full roll stick -> target 0.35 rad
+            in.sticks = { 1.0f, 0.0f, 0.0f, 0.5f };   // full roll stick -> target ~0.175 rad
             in.roll_rad = rr; in.gyro_p_dps = gp;
             control::Outputs oo;
             m2.update(in, oo);
@@ -424,8 +424,8 @@ int main()
             gp += acc * 0.0025f;
             rr += gp * (3.14159f / 180.0f) * 0.0025f;
         }
-        fails += check("mode_takeoff: bank holds near the 0.35 rad cap",
-                       rr > 0.25f && rr < 0.45f);
+        fails += check("mode_takeoff: bank holds near the ~0.175 rad cap",
+                       rr > 0.12f && rr < 0.23f);
     }
 
     // --- log_ring ---

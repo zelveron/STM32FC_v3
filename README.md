@@ -54,7 +54,7 @@ mid = ASSIST, high = TKOFF**.
 1. **MANUAL** — direct passthrough. Must work even if the IMU has faulted.
 2. **ASSIST** — IMU roll/pitch angle stabilisation with angle limits
    (equivalent to ArduPlane FBWA / Spektrum SAFE). Roll ±40°, pitch ±26°.
-3. **TKOFF** — roll wing-leveller only (stick → ±20° bank), **pitch / yaw /
+3. **TKOFF** — roll wing-leveller only (stick → ±10° bank, crosswind wing-low only), **pitch / yaw /
    throttle fully manual**, so nothing fights the elevator during rotation and
    climb-out. Take off in TKOFF, then switch down to ASSIST once settled.
 4. **AUTO** — IMU + GPS + baro. Altitude and track hold first, then loiter,
