@@ -22,6 +22,7 @@
 #include "control/srv_channel.hpp"
 #include "modes/mode_manual.hpp"
 #include "modes/mode_assist.hpp"
+#include "modes/mode_takeoff.hpp"
 #include "estimation/ahrs.hpp"
 
 namespace {
@@ -68,7 +69,7 @@ int main(int argc, char** argv)
 {
     double secs = 20.0, hz = 400.0;
     const char* script = nullptr;
-    bool check = false, assist = false;
+    bool check = false, assist = false, takeoff = false;
     for (int i = 1; i < argc; i++) {
         if (!std::strcmp(argv[i], "--secs")  && i + 1 < argc) secs = std::atof(argv[++i]);
         else if (!std::strcmp(argv[i], "--hz") && i + 1 < argc) hz = std::atof(argv[++i]);
@@ -76,6 +77,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--check")) { check = true; script = nullptr; secs = 20.0; }
         else if (!std::strcmp(argv[i], "--assist")) assist = true;
         else if (!std::strcmp(argv[i], "--assist-check")) { check = true; assist = true; script = nullptr; secs = 14.0; }
+        else if (!std::strcmp(argv[i], "--takeoff")) takeoff = true;
     }
     const double dt = 1.0 / hz;
 
@@ -91,6 +93,7 @@ int main(int argc, char** argv)
     control::RcChannel rc_roll, rc_pitch, rc_yaw, rc_thr;
     modes::ModeManual  mode_manual;
     modes::ModeAssist  mode_assist;
+    modes::ModeTakeoff mode_takeoff;
     {
         control::AttitudeCtrlConfig ac;   // defaults
         control::RateCtrlConfig rc;
@@ -99,9 +102,11 @@ int main(int argc, char** argv)
         rc.pitch = rc.roll;    rc.pitch.kff = 0.010f; rc.pitch.kp = 0.020f;
         rc.yaw   = rc.roll;    rc.yaw.kff  = 0.004f;  rc.yaw.kp  = 0.006f; rc.yaw.ki = 0.0f;
         mode_assist.configure(ac, rc, 0.70f, 0.45f, 80.0f);
+        mode_takeoff.configure(rc.roll, rc.sample_hz, 110.0f, 120.0f, 0.35f);
     }
-    modes::Mode* mode = assist ? static_cast<modes::Mode*>(&mode_assist)
-                               : static_cast<modes::Mode*>(&mode_manual);
+    modes::Mode* mode = takeoff ? static_cast<modes::Mode*>(&mode_takeoff)
+                      : assist  ? static_cast<modes::Mode*>(&mode_assist)
+                                : static_cast<modes::Mode*>(&mode_manual);
     mode->enter(control::Outputs{});
 
     if (!check)

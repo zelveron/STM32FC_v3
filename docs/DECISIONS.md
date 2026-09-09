@@ -427,3 +427,26 @@ leaves the data on the card with a stale dir size -> raw-sector recovery).
 Net: `worst_pass_us` 104 ms -> ~15 ms, and the rate loop is on-time ~99 % with
 the late dispatches bounded and dt-corrected. Flight-safe for MANUAL/ASSIST;
 not yet hard-real-time.
+
+**2026-09-09 — TKOFF mode: roll wing-leveller, pitch/yaw/throttle manual.**
+Requested for the hardest phase of RC flying. Taking off in ASSIST is a trap:
+ASSIST holds pitch *angle*, so centred sticks command 0 deg pitch -- it fights
+rotation, then either mushes off flat or drops the nose right after liftoff.
+`modes::ModeTakeoff` closes ONLY the roll loop (stick -> clamped bank -> the
+ASSIST roll rate PID -> aileron), and passes pitch, yaw and throttle straight
+through `mix_manual` exactly as MANUAL. So the pilot rotates and climbs with no
+stabiliser on the elevator, but the wings stay level (or a small commanded
+bank for crosswind). Bank authority is deliberately small: `max_roll` 0.35 rad
+(~20 deg), `max_roll_rate` 120 dps (vs ASSIST's 200), reusing the ASSIST roll
+gains (kff 0.006 / kp 0.010 / ki 0.02, i_max 0.4). Same bumpless entry and
+ground-integrator-freeze (`allow_integrators`) as ASSIST. Selection: ch7 high
+(was the unbuilt AUTO slot) -> low/mid/high = MANUAL / ASSIST / TKOFF; AUTO has
+no slot until it exists. Same gates and IMU-fault lockout as ASSIST (the
+`s_assist_lockout` latch now covers both stabilised modes). Verified: native
+(pitch/yaw passthrough exact, roll centred -> ~0 aileron, full stick -> bank
+holds at the 0.35 rad cap in a toy plant); SITL `--takeoff` (roll doublet
+levelled and held to <0.1 deg, pitch doublet passes through to the elevator and
+is NOT held). `--check` / `--assist-check` unchanged; builds green all envs.
+Procedure: take off TKOFF, drop to ASSIST once settled, MANUAL is the bail-out.
+A full launch/TKOFF-with-climb-pitch mode (fixed climb attitude + abort) is
+still future work and needs the SITL ground model first.

@@ -1,7 +1,8 @@
 #pragma once
 //
-// mode.hpp -- flight mode interface. One transmitter channel, three positions:
-// MANUAL / ASSIST / AUTO. Sensor faults demote downward only, never promote.
+// mode.hpp -- flight mode interface. MANUAL / ASSIST / AUTO on the mode switch,
+// plus TKOFF (roll wing-leveller, pitch/yaw/throttle manual) for the takeoff.
+// Sensor faults demote downward only, never promote.
 //
 // Modes are static instances (no heap). update() maps the pilot input +
 // estimator feedback to the 8 normalized outputs; enter() preloads internal
@@ -14,7 +15,7 @@
 
 namespace modes {
 
-enum class Id : uint8_t { manual, assist, auto_ };
+enum class Id : uint8_t { manual, assist, auto_, takeoff };   // append only (log-frame ids)
 
 struct ModeInput {
     control::Sticks sticks;          // normalized pilot commands

@@ -28,6 +28,7 @@
 #include "core/log_frame.hpp"
 #include "modes/mode_manual.hpp"
 #include "modes/mode_assist.hpp"
+#include "modes/mode_takeoff.hpp"
 
 #include <cstring>
 
@@ -385,6 +386,46 @@ int main()
         }
         fails += check("mode_assist closes to ~+0.35 rad bank",
                        roll > 0.20f && roll < 0.50f);
+    }
+
+    // --- mode_takeoff: roll assist only, pitch/yaw pass straight through ---
+    {
+        modes::ModeTakeoff m;
+        control::PidGains roll;
+        roll.kff = 0.006f; roll.kp = 0.004f; roll.ki = 0.05f; roll.i_max = 0.6f;
+        m.configure(roll, 400.0f, 110.0f, 120.0f, 0.35f);   // max bank 0.35 rad
+
+        // pitch / yaw are passthrough: out.ch[2..3] == pitch stick, ch[4] == yaw
+        m.enter(control::Outputs{});
+        modes::ModeInput mi; mi.dt_s = 0.0025f;
+        mi.sticks = { 0.0f, 0.6f, -0.3f, 0.5f };   // pitch +0.6, yaw -0.3
+        mi.roll_rad = 0.0f; mi.gyro_p_dps = 0.0f;
+        control::Outputs o;
+        m.update(mi, o);
+        fails += check("mode_takeoff: pitch passthrough (elevator == stick)",
+                       std::fabs(o.ch[2] - 0.6f) < 1e-3f && std::fabs(o.ch[3] - 0.6f) < 1e-3f);
+        fails += check("mode_takeoff: yaw passthrough (rudder == stick)",
+                       std::fabs(o.ch[4] - (-0.3f)) < 1e-3f);
+        fails += check("mode_takeoff: roll centred -> ~no aileron",
+                       std::fabs(o.ch[0]) < 0.05f);
+
+        // closed loop: hold roll stick right -> bank converges, capped by max_roll
+        modes::ModeTakeoff m2;
+        m2.configure(roll, 400.0f, 110.0f, 120.0f, 0.35f);
+        m2.enter(control::Outputs{});
+        float rr = 0.0f, gp = 0.0f;
+        for (int i = 0; i < 2000; i++) {
+            modes::ModeInput in; in.dt_s = 0.0025f;
+            in.sticks = { 1.0f, 0.0f, 0.0f, 0.5f };   // full roll stick -> target 0.35 rad
+            in.roll_rad = rr; in.gyro_p_dps = gp;
+            control::Outputs oo;
+            m2.update(in, oo);
+            const float acc = oo.ch[0] * 800.0f - gp * 4.0f;
+            gp += acc * 0.0025f;
+            rr += gp * (3.14159f / 180.0f) * 0.0025f;
+        }
+        fails += check("mode_takeoff: bank holds near the 0.35 rad cap",
+                       rr > 0.25f && rr < 0.45f);
     }
 
     // --- log_ring ---

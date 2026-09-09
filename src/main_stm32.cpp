@@ -32,6 +32,7 @@
 #include "control/surface_test.hpp"
 #include "modes/mode_manual.hpp"
 #include "modes/mode_assist.hpp"
+#include "modes/mode_takeoff.hpp"
 #include "core/usb_stream.hpp"
 #include "core/log_ring.hpp"
 #include "core/log_frame.hpp"
@@ -50,14 +51,14 @@ constexpr int      kModeCh  = 6;      // ch7: 3-pos mode select (low/mid/high)
 constexpr uint16_t kArmHi   = 1700;  // arm switch "on" threshold, us
 constexpr uint32_t kServoHz = 333;
 
-// ch7 -> requested mode. low = MANUAL, mid = ASSIST. AUTO (high) is not built
-// yet -- a high request resolves to MANUAL (see resolve_mode()); the MODE line
-// still reports req=AUTO so the mismatch is visible, never silent.
+// ch7 -> requested mode. low = MANUAL, mid = ASSIST, high = TKOFF (roll
+// wing-leveller, pitch/yaw manual -- fly the takeoff here, then drop to ASSIST
+// once settled in the climb). AUTO is not built yet and has no switch slot.
 inline modes::Id mode_from_ch(uint16_t us)
 {
     if (us < 1333) return modes::Id::manual;
     if (us < 1667) return modes::Id::assist;
-    return modes::Id::auto_;
+    return modes::Id::takeoff;
 }
 constexpr float kAirspeedFloorMps = 10.0f;   // GPS-speed proxy floor for the
                                              // angle loop (no pitot; unreliable
@@ -72,8 +73,12 @@ constexpr float kFlyThrottle       = 0.75f;
 constexpr float kFlyGroundSpeedMps = 8.0f;
 inline const char* mode_name(modes::Id id)
 {
-    return (id == modes::Id::manual) ? "MANUAL"
-         : (id == modes::Id::assist) ? "ASSIST" : "AUTO";
+    switch (id) {
+        case modes::Id::assist:  return "ASSIST";
+        case modes::Id::takeoff: return "TKOFF";
+        case modes::Id::auto_:   return "AUTO";
+        default:                 return "MANUAL";
+    }
 }
 
 // Latest sensor values, mirrored for the SD row (as in the old g_* globals).
@@ -92,6 +97,7 @@ control::RcChannel  s_rc_thr;                          // unipolar throttle
 control::SrvChannel s_srv[8];                          // per-output us mapping
 modes::ModeManual   s_mode_manual;
 modes::ModeAssist   s_mode_assist;
+modes::ModeTakeoff  s_mode_takeoff;                    // roll wing-leveller for the takeoff
 modes::Mode*        s_mode_active = &s_mode_manual;    // current mode object
 modes::Id           s_mode_cur    = modes::Id::manual; // its id, for the log frame
 bool               s_assist_lockout = false;          // latched: IMU faulted in ASSIST
@@ -147,15 +153,17 @@ void task_crsf()   // 100 Hz -- drain USART3, parse CRSF (RC / link stats)
 }
 
 // Which mode may actually run this tick. Demotion is downward only and, for an
-// IMU fault, latched (CLAUDE.md "Flight modes"): once ASSIST has lost the IMU it
-// stays locked out until reboot. ASSIST also requires the gyro-bias cal to have
-// completed (unbiased rates) -- that gate is not latched, it just waits.
+// IMU fault, latched (CLAUDE.md "Flight modes"): once a stabilised mode has lost
+// the IMU it stays locked out until reboot. The stabilised modes (ASSIST,
+// TKOFF) also require the gyro-bias cal to have completed (unbiased rates) --
+// that gate is not latched, it just waits.
 modes::Id resolve_mode(modes::Id req, bool imu_ok, bool bias_ready, bool failsafe)
 {
     if (failsafe) return modes::Id::manual;              // fall back, don't latch
     if (!imu_ok)  { s_assist_lockout = true; return modes::Id::manual; }
-    if (req == modes::Id::assist && !s_assist_lockout && bias_ready)
-        return modes::Id::assist;
+    const bool stab_ok = !s_assist_lockout && bias_ready;
+    if (req == modes::Id::assist  && stab_ok) return modes::Id::assist;
+    if (req == modes::Id::takeoff && stab_ok) return modes::Id::takeoff;
     return modes::Id::manual;                            // AUTO request lands here too
 }
 
@@ -165,9 +173,12 @@ modes::Id resolve_mode(modes::Id req, bool imu_ok, bool bias_ready, bool failsaf
 void set_mode(modes::Id id)
 {
     if (id == s_mode_cur) return;
-    modes::Mode* next = (id == modes::Id::assist)
-                      ? static_cast<modes::Mode*>(&s_mode_assist)
-                      : static_cast<modes::Mode*>(&s_mode_manual);
+    modes::Mode* next;
+    switch (id) {
+        case modes::Id::assist:  next = &s_mode_assist;  break;
+        case modes::Id::takeoff: next = &s_mode_takeoff; break;
+        default:                 next = &s_mode_manual;  break;
+    }
     next->enter(s_out);
     s_mode_active = next;
     s_mode_cur    = id;
@@ -179,18 +190,14 @@ void set_mode(modes::Id id)
 const char* fm_string()
 {
     if (s_failsafe.active())  return "!FS";
-    if (s_assist_lockout && s_mode_cur != modes::Id::assist) return "!LOCK";
-    if (!s_arming.armed()) {
-        switch (s_mode_cur) {
-            case modes::Id::assist: return "ASSIST*";
-            case modes::Id::auto_:  return "AUTO*";
-            default:                return "MANUAL*";
-        }
-    }
+    if (s_assist_lockout && s_mode_cur != modes::Id::assist
+                         && s_mode_cur != modes::Id::takeoff) return "!LOCK";
+    const bool armed = s_arming.armed();
     switch (s_mode_cur) {
-        case modes::Id::assist: return "ASSIST";
-        case modes::Id::auto_:  return "AUTO";
-        default:                return "MANUAL";
+        case modes::Id::assist:  return armed ? "ASSIST" : "ASSIST*";
+        case modes::Id::takeoff: return armed ? "TKOFF"  : "TKOFF*";
+        case modes::Id::auto_:   return armed ? "AUTO"   : "AUTO*";
+        default:                 return armed ? "MANUAL" : "MANUAL*";
     }
 }
 
@@ -663,6 +670,17 @@ void setup()
         rate.pitch = rate.roll; rate.pitch.kff = 0.010f; rate.pitch.kp = 0.020f;
         rate.yaw   = rate.roll; rate.yaw.kff = 0.004f; rate.yaw.kp = 0.006f; rate.yaw.ki = 0.0f;
         s_mode_assist.configure(att, rate, 0.70f, 0.45f, 80.0f);  // max roll/pitch rad, max yaw-rate dps
+
+        // TKOFF: roll wing-leveller only (pitch/yaw/throttle manual). Reuse the
+        // ASSIST roll rate gains; small bank authority and a gentle rate demand
+        // near the ground.
+        control::PidGains tk_roll;
+        tk_roll.kff = 0.006f; tk_roll.kp = 0.010f; tk_roll.ki = 0.02f;
+        tk_roll.i_max = 0.4f; tk_roll.d_lpf_hz = 25.0f;
+        s_mode_takeoff.configure(tk_roll, 400.0f,
+                                 110.0f,    // angle-P, dps per rad
+                                 120.0f,    // max roll rate, dps
+                                 0.35f);    // max bank, rad (~20 deg)
     }
 
     // Servo / ESC PWM. SrvChannel defaults (1000/1500/2000) suit surfaces and,

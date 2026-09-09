@@ -314,7 +314,8 @@ class MonitorApp:
             active = kv.get("active", "--")
             self.mode_var.set(active)
             self.mode_lbl.configure(fg={"MANUAL": self.amber, "ASSIST": self.green,
-                                        "AUTO": self.blue}.get(active, "#e0e0e0"))
+                                        "TKOFF": "#c084fc", "AUTO": self.blue}
+                                    .get(active, "#e0e0e0"))
             req = kv.get("req", "--")
             self.mode_sub_var.set(f"requested {req}   ·   last change {self._last_mode_change}")
             armed = kv.get("armed") == "1"

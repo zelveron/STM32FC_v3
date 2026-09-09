@@ -46,19 +46,24 @@ Removed since the streamer era: the **ALS31300 Hall sensor** (see
 - TX: RadioMaster TX16S MK3 (EdgeTX)
 - RX: RadioMaster ER8 (ExpressLRS), CRSF @ 420000 baud
 
-### Planned flight modes
+### Flight modes
 
-Selected by one three-position transmitter channel.
+Selected by one three-position transmitter channel (ch7): **low = MANUAL,
+mid = ASSIST, high = TKOFF**.
 
 1. **MANUAL** — direct passthrough. Must work even if the IMU has faulted.
 2. **ASSIST** — IMU roll/pitch angle stabilisation with angle limits
-   (equivalent to ArduPlane FBWA / Spektrum SAFE).
-3. **AUTO** — IMU + GPS + baro. Altitude and track hold first, then loiter,
-   then waypoints and RTL.
+   (equivalent to ArduPlane FBWA / Spektrum SAFE). Roll ±40°, pitch ±26°.
+3. **TKOFF** — roll wing-leveller only (stick → ±20° bank), **pitch / yaw /
+   throttle fully manual**, so nothing fights the elevator during rotation and
+   climb-out. Take off in TKOFF, then switch down to ASSIST once settled.
+4. **AUTO** — IMU + GPS + baro. Altitude and track hold first, then loiter,
+   then waypoints and RTL. *Not built; no switch slot yet.*
 
-Autopilot only ever engages on the pilot's switch. Sensor faults demote
-downward (AUTO → ASSIST → MANUAL), never upward, and every demotion is
-announced over CRSF telemetry.
+The stabilised modes (ASSIST, TKOFF) engage only on the pilot's switch and only
+after the gyro-bias cal completes. Sensor faults demote downward (AUTO →
+ASSIST → MANUAL), never upward, latched for the flight, and announced over CRSF
+telemetry (`FM` shows `!LOCK`).
 
 ---
 
