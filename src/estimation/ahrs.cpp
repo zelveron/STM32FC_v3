@@ -13,20 +13,19 @@ constexpr float kRad2Deg = 180.0f / kPi;
 // "gravity" -- reject it and coast on the gyro. (Kinematic / centripetal
 // compensation from GPS velocity comes with the nav filter, Phase 5.)
 constexpr float kMagBandG   = 0.05f;   // |a| must be within this of 1 g
-// A coordinated fixed-wing turn sits near 1 g (the specific force stays roughly
-// body-down) so the magnitude gate alone will not reject it -- but the accel
-// still cannot see bank in a turn, and without kinematic (centripetal)
-// compensation it drags the estimate toward level. Body rate is the reliable
-// "we are maneuvering" signal: sustained turn rates are 10-25 dps, so coast on
-// the gyro there and only trust the accel when nearly rotation-free.
-constexpr float kRateLoDps  = 5.0f;    // full trust below this body rate
-constexpr float kRateHiDps  = 25.0f;   // zero trust above this
+// A shallow turn can pass a magnitude-only gate; specific force is not an
+// Earth-fixed gravity observation. Without translational-acceleration aiding,
+// reject gravity corrections while turning and accept the gyro-drift tradeoff.
+// Slow acceleration remains ambiguous; see docs/SENSOR_FUSION.md.
+constexpr float kRateLoDps  = 1.0f;    // full gravity trust only near straight flight
+constexpr float kRateHiDps  = 3.0f;    // no kinematic aiding: coast during turns
 
 float s_q[4]    = { 1, 0, 0, 0 };   // w,x,y,z  body->world
 float s_bias[3] = { 0, 0, 0 };      // rad/s
 float s_kp      = 1.0f;
 float s_ki      = 0.05f;
 float s_trust   = 0.0f;
+float s_quiet_s = 0.0f;
 bool  s_init    = false;
 
 float clampf(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
@@ -56,22 +55,30 @@ void normalize()
 
 void reset()
 {
-    s_init = false;
+    s_init = false; s_quiet_s=0;
+    s_q[0] = 1; s_q[1] = s_q[2] = s_q[3] = 0;
     s_bias[0] = s_bias[1] = s_bias[2] = 0.0f;
     s_trust = 0.0f;
 }
 
 void set_gains(float kp, float ki) { s_kp = kp; s_ki = ki; }
+void clear_residual_bias() { s_bias[0]=s_bias[1]=s_bias[2]=0; s_quiet_s=0; }
+bool valid() { return s_init && std::isfinite(s_q[0]) && std::isfinite(s_q[1]) &&
+    std::isfinite(s_q[2]) && std::isfinite(s_q[3]); }
 
 void update(float ax_g, float ay_g, float az_g,
             float gx_dps, float gy_dps, float gz_dps, float dt_s)
 {
-    if (dt_s <= 0.0f || dt_s > 0.1f) dt_s = 0.01f;
+    if (!std::isfinite(dt_s) || dt_s <= 0 || dt_s > 0.02f ||
+        !std::isfinite(ax_g) || !std::isfinite(ay_g) || !std::isfinite(az_g) ||
+        !std::isfinite(gx_dps) || !std::isfinite(gy_dps) || !std::isfinite(gz_dps)) {
+        reset(); return;
+    }
 
     if (!s_init) {
         const float m = std::sqrt(ax_g*ax_g + ay_g*ay_g + az_g*az_g);
-        if (m > 0.1f) q_from_accel(ax_g / m, ay_g / m, az_g / m);
-        else          { s_q[0] = 1; s_q[1] = s_q[2] = s_q[3] = 0; }
+        if (m < 0.9f || m > 1.1f) return;
+        q_from_accel(ax_g / m, ay_g / m, az_g / m);
         s_bias[0] = s_bias[1] = s_bias[2] = 0.0f;
         s_init = true;
         return;
@@ -91,6 +98,7 @@ void update(float ax_g, float ay_g, float az_g,
         w = clampf(mag_w, 0.0f, 1.0f) * clampf(rate_w, 0.0f, 1.0f);
     }
     s_trust = w;
+    if(w<.4f) s_quiet_s=0;
 
     if (w > 0.0f) {
         // gravity direction in body from the current quaternion (3rd row of R)
@@ -108,9 +116,22 @@ void update(float ax_g, float ay_g, float az_g,
         const float ez = axn*vy - ayn*vx;
 
         // Mahony explicit complementary filter (b_dot = -Ki e ; w_hat = w - b + Kp e)
-        s_bias[0] -= s_ki * w * ex * dt_s;
-        s_bias[1] -= s_ki * w * ey * dt_s;
-        s_bias[2] -= s_ki * w * ez * dt_s;
+        // Innovation angle rejects acceleration that happens to retain |a|=1g.
+        // Soft gate preserves gentle correction; gyro propagation always runs.
+        const float dot=clampf(axn*vx+ayn*vy+azn*vz,-1,1);
+        const float innovation=std::acos(dot)*kRad2Deg;
+        w*=clampf((25.f-innovation)/15.f,0,1);
+        s_trust=w;
+        const float rate2=gx_dps*gx_dps+gy_dps*gy_dps+gz_dps*gz_dps;
+        if(w>.4f&&rate2<9&&innovation<5&&std::fabs(amag-1)<.02f) s_quiet_s+=dt_s;
+        else s_quiet_s=0;
+        // Bias learning is slower/more selective than attitude correction.
+        // Bound it so a prolonged acceleration cannot learn an arbitrary rate.
+        if(s_quiet_s>=1) {
+            const float e[3]={ex,ey,ez};
+            for(int i=0;i<3;++i) s_bias[i]=clampf(s_bias[i]-s_ki*w*e[i]*dt_s,
+                                               -3*kDeg2Rad,3*kDeg2Rad);
+        }
 
         wx += s_kp * w * ex;
         wy += s_kp * w * ey;

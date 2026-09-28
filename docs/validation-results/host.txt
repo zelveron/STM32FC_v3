@@ -1,0 +1,293 @@
+[PASS] ahrs level -> |roll|,|pitch| < 0.01 rad
+[PASS] ahrs gates accel at 300 dps (acc_trust ~ 0)
+[PASS] ahrs online bias converges to ~2 dps
+[PASS] ahrs holds level despite gyro bias
+[PASS] imu_prep bias_ready after a stationary window
+[PASS] imu_prep gyro bias ~ (1.5,-0.8,0.3)
+[PASS] imu_prep removes the bias (|g| < 0.2 dps)
+[PASS] imu_prep restarts cal on motion
+[PASS] baro not referenced -> alt 0
+[PASS] baro at ground pressure -> ~0 m
+[PASS] baro lower pressure -> positive altitude ~85 m
+[PASS] sched::add x2
+  fast_runs=50 slow_runs=10 passes=4120593
+[PASS] 100 Hz task ran ~50x in 500 ms
+[PASS] 20 Hz task ran ~10x in 500 ms
+[PASS] get_stats(0) ok
+[PASS] reset_stats zeroes counters
+[PASS] sched::add critical
+[PASS] critical task runs at rate
+[PASS] rc.norm(1500) == 0
+[PASS] rc.norm(1505) == 0 (deadzone)
+[PASS] rc.norm(2000) ~ +1
+[PASS] rc.norm(1000) ~ -1
+[PASS] rc.unipolar(1000)==0, (2000)==1
+[PASS] rc reversed flips sign
+[PASS] srv.from_norm(0)==1500
+[PASS] srv.from_norm(+1)==2000
+[PASS] srv.from_norm(-1)==1000
+[PASS] srv.from_norm clamps
+[PASS] srv.from_unipolar(0.5)==1500
+[PASS] srv.safe: surface centre / throttle min
+[PASS] srv reversed: from_norm(+1)==1000
+[PASS] mix: roll -> both ailerons +1, nothing else
+[PASS] mix: elevator L==R, ESC L==R==throttle
+[PASS] fs starts engaged (rc_loss)
+[PASS] fs: link up but not yet stable -> still engaged
+[PASS] fs: clears after recover window
+[PASS] fs: driver age timeout engages without a second delay
+[PASS] fs: re-engages after engage window
+[PASS] arm: disarmed by default
+[PASS] arm: arms on rising edge + idle throttle
+[PASS] arm: stays armed with throttle up
+[PASS] arm: disarms on switch low
+[PASS] arm: will not arm with throttle up
+[PASS] arm: will not arm during failsafe
+[PASS] surface_test inactive by default
+[PASS] surface_test: each axis moves only in its segment
+[PASS] surface_test: aileron reaches +/-1
+[PASS] surface_test: elevator reaches +/-1
+[PASS] surface_test: rudder reaches +/-1
+[PASS] surface_test finishes and returns to inactive
+[PASS] pid P: err 1 * kp 2 -> 2
+[PASS] pid FF: kff 0.5 * sp 3 -> 1.5
+[PASS] pid I clamps at i_max
+[PASS] pid I frozen when disabled
+[PASS] pid I resumes when re-enabled
+[PASS] pid D ignores setpoint step
+[PASS] pid D opposes measurement rise (D < 0)
+[PASS] pid anti-windup: I frozen at the rail
+[PASS] pid anti-windup: output responds immediately on flip
+[PASS] pid preset_integrator -> bumpless first output
+[PASS] rate_ctrl: FF 0.01 * 50 dps demand -> roll out 0.5
+[PASS] rate_ctrl: other axes zero
+[PASS] rate_ctrl preset -> bumpless (roll ~0.3, pitch ~-0.2)
+[PASS] att_ctrl: roll error -> positive roll-rate demand, clamped
+[PASS] att_ctrl: no error -> zero rate demand
+[PASS] att_ctrl: banked -> turn-comp adds nose-up (dq > 0)
+[PASS] mode_manual: roll -> ailerons, throttle -> ESCs
+[PASS] mode_assist bumpless: first roll out ~ entry 0.25
+[PASS] mode_assist closes to ~+0.35 rad bank
+[PASS] mode_takeoff: pitch passthrough (elevator == stick)
+[PASS] mode_takeoff: yaw passthrough (rudder == stick)
+[PASS] mode_takeoff: roll centred -> ~no aileron
+[PASS] mode_takeoff: bank holds near the ~0.175 rad cap
+[PASS] ring empty
+[PASS] ring push 100
+[PASS] ring peek matches
+[PASS] ring consume 40 -> used 60
+[PASS] ring overflow -> drop + count
+[PASS] ring wraparound 500x300 clean
+[PASS] crc16 CCITT('123456789') == 0x29B1
+[PASS] log_frame_valid after finalize
+[PASS] log_frame_valid false after corruption
+[PASS] file header tag/size
+  sizeof(LogFrame)=86
+
+RESULT: all pass
+[PASS] RC never received is unhealthy
+[PASS] optional SD logger is exercised before arming
+[PASS] valid deliberate arming applies pilot throttle
+[PASS] last valid RC is usable just before age timeout
+[PASS] 200 ms RC age cuts both motors
+[PASS] healthy failsafe commands roll toward level
+[PASS] failsafe keeps flight session latched
+[PASS] recovery does not restore throttle before stable window
+[PASS] requested automatic recovery restores current throttle
+[PASS] failsafe with failed estimator centers surfaces
+[PASS] IMU fault demotion is latched
+[PASS] CH5 low on recovery cancels prior arming
+[PASS] recovered IMU does not silently reenter assist
+[PASS] airborne disarm preserves barometric ground reference
+[PASS] asynchronous SD service continues after arming
+[PASS] bootloader rejected after flight session
+[PASS] simulation override removed from flight commands
+[PASS] overflowed USB line cannot execute its suffix
+[PASS] bootloader works on ground before first arm
+[PASS] cold boot with CH5 high cannot arm
+[PASS] initial arming needs idle throttle
+[PASS] automatic recovery retains only previous authorization
+[PASS] disarm cancels automatic recovery
+[PASS] RC outage cannot arm a previously disarmed aircraft
+[PASS] permission fault cancels pending automatic resume
+[PASS] statistics alone never establish RC
+[PASS] short RC payload never establishes RC
+[PASS] full channel payload establishes RC
+[PASS] unknown valid traffic does not refresh channels
+[PASS] partial frame timeout allows next valid packet
+[PASS] begin clears old RC authorization
+[PASS] CRSF drain has a finite byte budget
+[PASS] SAM-M10Q NMEA yields valid fix/speed/course
+[PASS] GNSS double precision preserves decimal minutes
+[PASS] RMC void invalidates navigation data
+[PASS] GGA no-fix cannot produce usable coordinates
+[PASS] invalid latitude minutes rejected
+[PASS] stale GPS fix expires
+[PASS] GPS discovery never writes a conflicting baud command
+[PASS] silent receiver restarts passive baud detection
+[PASS] selected host baud tracked accurately
+[PASS] constant rotation rejected as gyro calibration
+[PASS] invalid gravity rejected during calibration
+[PASS] calibration cannot run after flight authorization
+[PASS] stationary valid data calibrates
+[PASS] independent calibrated gyro bias
+[PASS] mounting transform is a rotation, not reflection
+[PASS] PCB orientation produces level attitude
+[PASS] NaN invalidates estimator without poisoning quaternion
+[PASS] large estimator time gap is rejected
+[PASS] primary selected with two healthy IMUs
+[PASS] failed primary switches to healthy backup
+[PASS] primary recovery does not oscillate selection
+[PASS] brief IMU disagreement is debounced
+[PASS] persistent two-IMU disagreement is ambiguous
+[PASS] ambiguous IMUs require restart/inspection
+[PASS] no healthy IMU inhibits stabilization
+[PASS] ASSIST entry/I-enable obeys configured 15 us per control tick ceiling
+[PASS] surface slew preserves live pilot throttle
+[PASS] TKOFF smooths roll while retaining pilot pitch/yaw/throttle
+[PASS] nonfinite actuator commands produce defined pulses
+[PASS] failsafe recovery window survives uint32 wrap
+[PASS] control deadline fault inhibits motors
+63 checks, 0 failures
+[PASS] RC never received is unhealthy
+[PASS] optional SD logger is exercised before arming
+[PASS] default build inhibits motor arming
+[PASS] default build holds both ESCs at idle
+4 checks, 0 failures
+[PASS] SD write busy wait terminates at 2000 ms
+[PASS] SD read busy wait terminates at 2000 ms
+[PASS] boot preallocation opens asynchronous logger
+[PASS] subsector budget cannot initiate IO
+[PASS] header write starts without waiting or reporting durable bytes
+[PASS] pending card returns promptly without consuming or reusing DMA buffer
+[PASS] committed header has valid CRC session and sequence
+[PASS] ring bytes retained until card programming completes
+[PASS] acknowledged sector consumes exactly its payload
+[PASS] asynchronous tail request preserves last partial sector
+[PASS] sectors reconstruct original stream byte for byte
+[PASS] card failure latches logger off and preserves pending data
+[PASS] in-flight logger cannot remount/reuse pending DMA storage
+[PASS] CMD24 uses sector addressing
+[PASS] command response is polled without waiting
+[PASS] DMA begins only after accepted write command
+[PASS] DMA completion requests card status, not durability
+[PASS] busy card is rechecked in later calls
+[PASS] only READY_FOR_DATA plus TRANSFER completes
+[PASS] command timeout survives timer wrap and aborts without blocking
+[PASS] removed card latches error and rejects restart
+[PASS] R1 write-protection error cannot start DMA
+[PASS] data timeout terminates stuck transfer
+[PASS] sector CRC detects power-cut/corruption
+22 checks, 0 failures
+[PASS] Bosch config upload / dual-sensor setup succeeds
+[PASS] FIFO explicitly uses paired headerless filtered samples
+[PASS] empty FIFO produces no new data
+[PASS] FIFO delivers all paired samples in order
+[PASS] frozen sensor clock is rejected
+[PASS] device can initialize before flight
+[PASS] excess FIFO backlog rejected instead of silently decimated
+[PASS] floating MISO cannot appear healthy
+[PASS] saturated gyro invalidates sample
+[PASS] two real driver instances initialize
+[PASS] startup discards FIFO accumulated during other device init
+[PASS] dual stationary calibration yields level attitude
+[PASS] real primary disconnect selects calibrated second IMU
+[PASS] loss of both drivers invalidates attitude eligibility
+[PASS] real dual-IMU disagreement is latched after filtering
+[PASS] uncalibrated backup cannot silently take control
+[PASS] responsive chips without new FIFO data expire
+17 checks, 0 failures
+[PASS] BMP581 initializes on correct I2C address
+[PASS] normal 50 Hz configuration and DRDY source enabled
+[PASS] no fabricated sample before data ready
+[PASS] Bosch conversion returns valid pressure and temperature
+[PASS] same DRDY event is not reused
+[PASS] pressure health expires after 200 ms
+[PASS] out-of-range pressure rejected
+[PASS] I2C fault stops normal polling
+[PASS] bus recovery does not silently restart failed device
+[PASS] invalid oversampling/rate combination rejected
+10 checks, 0 failures
+[PASS] 30 degree coordinated turn retains required body pitch and yaw rates
+[PASS] steady bank has zero Euler pitch rate despite nonzero body pitch rate
+[PASS] left and right turns both require positive body pitch rate
+[PASS] roll recovery wraps angle error across pi
+[PASS] stick step respects angular acceleration limit
+[PASS] invalid time step cannot jump request
+[PASS] downstream surface limit prevents hidden integral accumulation
+[PASS] integrator remains effective when output is attainable
+[PASS] external tracking permits integration away from a limit
+[PASS] groundspeed/unvalidated airspeed cannot schedule gains
+[PASS] airspeed scaling is bounded at low and high speed
+[PASS] invalid airspeed returns nominal gains
+[PASS] no-pitot steady turn does not command opposing rudder
+[PASS] no-pitot geometry retains pitch rate without attitude error
+[PASS] full pilot rudder overrides yaw damping
+[PASS] pitch trim is an attitude target offset
+[PASS] disarmed aircraft freezes integration
+[PASS] power evidence is debounced
+[PASS] moderate power enables integration without GNSS
+[PASS] glide retains integrators
+[PASS] RC failsafe retains flight evidence
+[PASS] explicit disarm clears flight evidence
+[PASS] landing requires sustained corroborating measurements
+[PASS] mode change has telemetry priority
+[PASS] queue rejection is counted and latest state retried
+[PASS] telemetry respects byte budget plus bounded initial burst
+[PASS] unchanged GNSS fix is transmitted only once
+[PASS] budget pressure is observable
+[PASS] RC link loss suppresses FC telemetry
+[PASS] each telemetry group can be disabled
+[PASS] unmeasured notch defaults to bypass
+[PASS] invalid notch settings are rejected
+[PASS] measured notch accepts valid frequency/Q
+[PASS] notch suppresses configured sinusoidal vibration
+[PASS] large constant-norm acceleration innovation is rejected
+[PASS] rejected acceleration cannot learn false gyro bias
+36 checks, 0 failures
+scenario=0 pitot=0 initial=18.0 bank_error=0.004 pitch_error=0.005 estimator_error=0.009 final_bank=0.007 min_speed=17.7
+[PASS] delayed 50 Hz surfaces remain bounded and states finite
+[PASS] sustained turn tracks bank within 10 degrees
+[PASS] sustained turn pitch error remains within 10 degrees
+[PASS] long-turn estimator roll error remains within 10 degrees
+[PASS] wings-level recovery completes after long turns
+[PASS] simulated aircraft retains forward airspeed
+scenario=1 pitot=0 initial=15.0 bank_error=0.007 pitch_error=0.006 estimator_error=0.009 final_bank=0.004 min_speed=14.4
+[PASS] delayed 50 Hz surfaces remain bounded and states finite
+[PASS] sustained turn tracks bank within 10 degrees
+[PASS] sustained turn pitch error remains within 10 degrees
+[PASS] long-turn estimator roll error remains within 10 degrees
+[PASS] wings-level recovery completes after long turns
+[PASS] simulated aircraft retains forward airspeed
+scenario=2 pitot=0 initial=24.0 bank_error=0.013 pitch_error=0.009 estimator_error=0.022 final_bank=0.022 min_speed=23.7
+[PASS] delayed 50 Hz surfaces remain bounded and states finite
+[PASS] sustained turn tracks bank within 10 degrees
+[PASS] sustained turn pitch error remains within 10 degrees
+[PASS] long-turn estimator roll error remains within 10 degrees
+[PASS] wings-level recovery completes after long turns
+[PASS] simulated aircraft retains forward airspeed
+scenario=3 pitot=1 initial=18.0 bank_error=0.004 pitch_error=0.006 estimator_error=0.009 final_bank=0.009 min_speed=17.7
+[PASS] delayed 50 Hz surfaces remain bounded and states finite
+[PASS] sustained turn tracks bank within 10 degrees
+[PASS] sustained turn pitch error remains within 10 degrees
+[PASS] long-turn estimator roll error remains within 10 degrees
+[PASS] wings-level recovery completes after long turns
+[PASS] simulated aircraft retains forward airspeed
+24 checks, 0 failures
+[PASS] trim holds: |roll|<2 deg over first 1.9 s
+[PASS] trim holds: |pitch|<6 deg
+[PASS] trim holds: airspeed within 3 m/s of 18
+[PASS] aileron-right -> roll-right (doublet peak > 5 deg)
+[PASS] no departure: |roll_end|<30
+[PASS] no departure: |pitch_end|<30
+[PASS] no departure: airspeed_end in [10,30]
+[PASS] gated AHRS: max roll error < 8 deg (incl. throttle bump)
+[PASS] gated AHRS: max pitch error < 8 deg (incl. throttle bump)
+
+RESULT: all pass
+[PASS] ASSIST holds commanded bank (within 0.15 rad of target)
+[PASS] ASSIST bank does not oscillate (roll-rate max < 120 dps)
+[PASS] ASSIST returns to ~level after stick release (|bank| < 0.12 rad)
+[PASS] ASSIST: no departure (airspeed_end in [10,30])
+
+RESULT: all pass

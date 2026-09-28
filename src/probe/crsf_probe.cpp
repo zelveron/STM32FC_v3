@@ -1,9 +1,9 @@
 //
 // crsf_probe.cpp -- read the ER8 (ExpressLRS) CRSF link and stream it to USB.
 //
-// NOT flight firmware. Built by [env:crsf_probe]. USART3: PB11 <- RX TX,
-// PB10 -> RX RX, 420000 8N1 not inverted. Verifies live sticks + link stats
-// before the real drivers/crsf (DMA circular RX + telemetry TX) is wired in.
+// NOT flight firmware. Built by [env:crsf_probe]. UART4: PA1 <- ER8 TX,
+// PA0 -> ER8 RX, 420000 8N1 not inverted. Verifies live sticks + link stats
+// independently of sensor/control initialization.
 //
 #include <Arduino.h>
 
@@ -21,7 +21,7 @@ void setup()
     delay(200);
     L = &usb_stream::log();
 
-    L->println(F("=== CRSF PROBE -- USART3 PB11(rx)/PB10(tx) @ 420000 8N1 ==="));
+    L->println(F("=== CRSF PROBE -- UART4 J2 PA1(rx)/PA0(tx) @ 420000 8N1 ==="));
     L->println(F("power the ER8 + TX16S, bind if needed; RC = live sticks, LINK = radio link"));
     crsf::begin(420000);
 }

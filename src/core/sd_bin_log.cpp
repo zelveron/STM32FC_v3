@@ -1,71 +1,53 @@
 #include "sd_bin_log.hpp"
-#include "log_frame.hpp"
-
-// STM32SD / FatFs, Arduino -- excluded from [env:native].
-#include <Arduino.h>
-#include <STM32SD.h>
-
+#include "sd_storage.hpp"
+#include "log_sector.hpp"
+#include <cstring>
 namespace sd_bin_log {
 namespace {
-
-File           s_file;
-bool           s_ok = false;
-char           s_name[16] = "";
-uint32_t       s_bytes = 0;
-core::LogRing*  s_ring = nullptr;
-
-} // namespace
-
-Result begin(core::LogRing& ring)
-{
-    s_ring  = &ring;
-    s_ok    = false;
-    s_bytes = 0;
-
-    if (!SD.begin()) return Result::begin_failed;
-
-    int n = 0;
-    do { snprintf(s_name, sizeof(s_name), "FLT%05d.BIN", n++); }
-    while (SD.exists(s_name));
-
-    s_file = SD.open(s_name, FILE_WRITE);
-    if (!s_file) return Result::open_failed;
-
-    core::LogFileHeader h;
-    core::log_file_header_init(h);
-    s_file.write(reinterpret_cast<const uint8_t*>(&h), sizeof(h));
-    s_file.flush();
-
-    s_ok = true;
-    return Result::ok;
+core::LogRing* ring=nullptr;
+storage::Extent extent;
+alignas(4) core::LogSector sector;
+char filename[16]{};
+bool good=false,exhausted=false,pending=false,header=true,tail=false,started=false;
+uint32_t sequence=0,bytes=0,last_commit=0;
 }
-
-bool        ok()            { return s_ok; }
-const char* name()          { return s_name; }
-uint32_t    bytes_written() { return s_bytes; }
-
-uint32_t flush_step(uint32_t budget_bytes)
-{
-    if (!s_ok || s_ring == nullptr) return 0;
-
-    uint32_t written = 0;
-    uint8_t  sector[512];
-    while (s_ring->used() >= sizeof(sector) && written < budget_bytes) {
-        s_ring->peek(sector, sizeof(sector));
-        if (s_file.write(sector, sizeof(sector)) != sizeof(sector)) {
-            s_ok = false;                 // card fault -- stop, keep the ring
-            break;
-        }
-        s_ring->consume(sizeof(sector));
-        written  += sizeof(sector);
-        s_bytes  += sizeof(sector);
+Result begin(core::LogRing& r) {
+    if(started) return Result::open_failed;
+    started=true;
+    if(!storage::prepare(extent,filename)) return Result::begin_failed;
+    if(!extent.sectors||!extent.session) return Result::open_failed;
+    ring=&r; good=true; last_commit=storage::now_ms(); return Result::ok;
+}
+bool ok() { return good; }
+bool full() { return exhausted; }
+const char* name() { return filename; }
+uint32_t bytes_written() { return bytes; }
+uint32_t sectors_written() { return sequence; }
+void sync() { tail=true; }
+uint32_t flush_step(uint32_t budget) {
+    if(!good||budget<512) return 0;
+    if(pending) {
+        const auto p=storage::poll_sector();
+        if(p==storage::Progress::error) { good=false; return 0; }
+        if(p!=storage::Progress::complete) return 0;
+        const uint32_t n=sector.used;
+        if(!header) ring->consume(n);
+        header=false; pending=false; ++sequence; bytes+=n; last_commit=storage::now_ms();
+        if(sequence==extent.sectors) { exhausted=true; good=false; }
+        return n;
     }
-    return written;
+    if(!header&&ring->used()<sizeof(sector.payload)&&!tail&&
+       uint32_t(storage::now_ms()-last_commit)<100) return 0;
+    if(!header&&!ring->used()) { tail=false; return 0; }
+    sector={}; sector.session=extent.session; sector.sequence=sequence;
+    if(header) {
+        core::LogFileHeader h; core::log_file_header_init(h);
+        std::memcpy(sector.payload,&h,sizeof(h)); sector.used=sizeof(h);
+    } else sector.used=uint16_t(ring->peek(sector.payload,sizeof(sector.payload)));
+    core::finalize(sector);
+    if(!storage::start_sector(extent.first_sector+sequence,reinterpret_cast<const uint8_t*>(&sector))) {
+        good=false; return 0;
+    }
+    pending=true; tail=false; return 0;
 }
-
-void sync()
-{
-    if (s_ok) s_file.flush();
 }
-
-} // namespace sd_bin_log

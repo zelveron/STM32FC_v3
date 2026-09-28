@@ -195,7 +195,7 @@ int main()
         fs.update(true, 500);   // 400 ms stable >= 300 recover
         fails += check("fs: clears after recover window", !fs.active());
         fs.update(false, 600);
-        fails += check("fs: link drop, not yet -> still clear", !fs.active());
+        fails += check("fs: driver age timeout engages without a second delay", fs.active());
         fs.update(false, 900);  // 300 ms lost >= 200 engage
         fails += check("fs: re-engages after engage window", fs.active());
     }
@@ -308,7 +308,7 @@ int main()
     {
         control::RateController rc;
         control::RateCtrlConfig cfg;
-        cfg.roll.kff = 0.01f;  cfg.roll.out_min = -1;  cfg.roll.out_max = 1;
+        cfg.roll.kff = 0.01f; cfg.roll.i_max=0.4f; cfg.roll.out_min = -1; cfg.roll.out_max = 1;
         cfg.pitch = cfg.yaw = cfg.roll;
         rc.configure(cfg);
         float r, p, y;
@@ -356,7 +356,7 @@ int main()
         rc.roll.kff = 0.006f; rc.roll.kp = 0.004f; rc.roll.ki = 0.05f;
         rc.roll.i_max = 0.6f; rc.roll.out_min = -1; rc.roll.out_max = 1;
         rc.pitch = rc.yaw = rc.roll;
-        m.configure(ac, rc, 0.7f, 0.5f, 90.0f);
+        m.configure(ac, rc, 0.7f, 0.5f);
 
         // bumpless: enter() with a non-zero current output, first update reproduces it
         control::Outputs cur{}; cur.ch[0] = cur.ch[1] = 0.25f;
@@ -370,7 +370,7 @@ int main()
 
         // closed loop: hold roll stick right, level aircraft -> roll command drives positive
         modes::ModeAssist m2;
-        m2.configure(ac, rc, 0.7f, 0.5f, 90.0f);
+        m2.configure(ac, rc, 0.7f, 0.5f);
         m2.enter(control::Outputs{});
         float roll = 0.0f, gp = 0.0f;
         for (int i = 0; i < 2000; i++) {   // 5 s @ 400 Hz, trivial roll integrator

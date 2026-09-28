@@ -18,8 +18,11 @@
 #include "hal/hal.hpp"
 #include "core/scheduler.hpp"
 #include "core/failsafe.hpp"
+#include "core/flight_state.hpp"
 #include "core/arming.hpp"
-#include "drivers/bmi323.hpp"
+#include "drivers/imu_v2.hpp"
+#include "drivers/bmm350.hpp"
+#include "config/airframe.hpp"
 #include "drivers/bmp581.hpp"
 #include "drivers/ublox.hpp"
 #include "drivers/crsf.hpp"
@@ -29,18 +32,18 @@
 #include "control/rc_channel.hpp"
 #include "control/srv_channel.hpp"
 #include "control/mixer.hpp"
-#include "control/surface_test.hpp"
 #include "modes/mode_manual.hpp"
 #include "modes/mode_assist.hpp"
 #include "modes/mode_takeoff.hpp"
 #include "core/usb_stream.hpp"
 #include "core/log_ring.hpp"
 #include "core/log_frame.hpp"
+#include "core/diagnostic_log.hpp"
 #include "core/sd_bin_log.hpp"
 
 namespace {
 
-constexpr uint32_t kGpsBootBaud = 9600;
+constexpr uint32_t kGpsBootBaud = 38400;
 constexpr float    kRadToDeg    = 57.2957795130823f;
 
 // --- CRSF channel assignment (AETR; index 0-based). Set kArmCh to whichever
@@ -49,7 +52,7 @@ constexpr int      kRollCh  = 0, kPitchCh = 1, kThrCh = 2, kYawCh = 3;
 constexpr int      kArmCh   = 4;      // ch5: 2-pos arm switch
 constexpr int      kModeCh  = 6;      // ch7: 3-pos mode select (low/mid/high)
 constexpr uint16_t kArmHi   = 1700;  // arm switch "on" threshold, us
-constexpr uint32_t kServoHz = 333;
+
 
 // ch7 -> requested mode. low = MANUAL, mid = ASSIST, high = TKOFF (roll
 // wing-leveller, pitch/yaw manual -- fly the takeoff here, then drop to ASSIST
@@ -60,17 +63,8 @@ inline modes::Id mode_from_ch(uint16_t us)
     if (us < 1667) return modes::Id::assist;
     return modes::Id::takeoff;
 }
-constexpr float kAirspeedFloorMps = 10.0f;   // GPS-speed proxy floor for the
-                                             // angle loop (no pitot; unreliable
-                                             // in wind -- see DECISIONS.md)
 
-// "flying" latch: once armed, the ASSIST stabilizer integrators stay frozen
-// until one of these trips (then held until disarm). Set clear of taxi: 0.75
-// throttle is takeoff power on the twin EDF, well above any taxi setting;
-// 8 m/s (~29 km/h) is above a fast taxi but below this airframe's rotation
-// speed, so it latches during the takeoff roll.
-constexpr float kFlyThrottle       = 0.75f;
-constexpr float kFlyGroundSpeedMps = 8.0f;
+// Integration eligibility is maintained independently from the flight-session latch.
 inline const char* mode_name(modes::Id id)
 {
     switch (id) {
@@ -101,16 +95,18 @@ modes::ModeTakeoff  s_mode_takeoff;                    // roll wing-leveller for
 modes::Mode*        s_mode_active = &s_mode_manual;    // current mode object
 modes::Id           s_mode_cur    = modes::Id::manual; // its id, for the log frame
 bool               s_assist_lockout = false;          // latched: IMU faulted in ASSIST
-bool               s_flying         = false;          // latched: armed + spooled/rolling
-bool               s_sim_flying     = false;          // bench: SIM_FLYING forces s_flying
-control::SurfaceTest s_surface_test;                   // gyro-cal-done surface sweep
+bool               s_flying         = false;          // current integration eligibility
+bool               s_flight_session = false;
+bool               s_control_fault = false;
+bool               s_output_ready = false;
 core::Failsafe      s_failsafe;
 core::Arming        s_arming;
+core::FlightState   s_flight_state;
+core::TelemetrySchedule s_telemetry;
 control::Outputs    s_out;                             // last outputs (bumpless)
 uint16_t            s_out_us[8] = { 0,0,0,0,0,0,0,0 }; // last pulses, for OUT,
 modes::Id           s_mode_req  = modes::Id::manual;   // requested via ch7
 core::LogRing       s_log_ring;                        // binary log producers -> SD
-estimation::ImuPrep s_imu_prep;                        // gyro-bias cal + LPF
 estimation::BaroAlt s_baro_alt;                        // ground-referenced altitude
 float               g_alt_agl_m  = 0.0f;
 float               g_climb_mps  = 0.0f;               // filtered dAGL/dt, for the CRSF vario
@@ -147,29 +143,28 @@ void task_gps()   // 50 Hz -- drain UART, parse, emit position / status
     }
 }
 
-void task_crsf()   // 100 Hz -- drain USART3, parse CRSF (RC / link stats)
+void task_crsf()   // 400 Hz -- drain UART4, parse CRSF (RC / link stats)
 {
     crsf::poll();   // USB echo of RC / LINK is in task_stream / task_debug
 }
 
 // Which mode may actually run this tick. Demotion is downward only and, for an
-// IMU fault, latched (CLAUDE.md "Flight modes"): once a stabilised mode has lost
+// IMU fault, latched: once a stabilised mode has lost
 // the IMU it stays locked out until reboot. The stabilised modes (ASSIST,
 // TKOFF) also require the gyro-bias cal to have completed (unbiased rates) --
 // that gate is not latched, it just waits.
 modes::Id resolve_mode(modes::Id req, bool imu_ok, bool bias_ready, bool failsafe)
 {
-    if (failsafe) return modes::Id::manual;              // fall back, don't latch
-    if (!imu_ok)  { s_assist_lockout = true; return modes::Id::manual; }
-    const bool stab_ok = !s_assist_lockout && bias_ready;
-    if (req == modes::Id::assist  && stab_ok) return modes::Id::assist;
-    if (req == modes::Id::takeoff && stab_ok) return modes::Id::takeoff;
-    return modes::Id::manual;                            // AUTO request lands here too
+    if (!imu_ok && (s_mode_cur==modes::Id::assist || s_mode_cur==modes::Id::takeoff))
+        s_assist_lockout=true;
+    const bool stab_ok=imu_ok && !s_assist_lockout && bias_ready;
+    if (failsafe) return stab_ok ? modes::Id::assist : modes::Id::manual;
+    if (req==modes::Id::assist && stab_ok) return modes::Id::assist;
+    if (req==modes::Id::takeoff && stab_ok) return modes::Id::takeoff;
+    return modes::Id::manual;
 }
 
-// Switch the active mode, preloading it from the last outputs so the first
-// command equals the current servo position (bumpless -- a snap at speed loses
-// the airframe).
+// Start stabilized surface slew from the last outputs; MANUAL is immediate.
 void set_mode(modes::Id id)
 {
     if (id == s_mode_cur) return;
@@ -185,13 +180,21 @@ void set_mode(modes::Id id)
     L().print(F("MODE_CHANGE,")); L().println(next->name());
 }
 
-// Flight-mode string for CRSF telemetry (EdgeTX "FM" sensor). A leading '!'
-// makes EdgeTX flag it; a trailing '*' is the common "disarmed" marker.
+// Flight-mode text for CRSF. Markers are our labels, not guaranteed alarms.
+// Configure radio alarms separately; telemetry can be stale during RF loss.
 const char* fm_string()
 {
-    if (s_failsafe.active())  return "!FS";
+    if (s_control_fault) return "!TIMING";
+    if (s_failsafe.active()) return imu_v2::healthy() && imu_v2::bias_ready() && !s_assist_lockout ? "!FS-LVL" : "!FS-CTR";
     if (s_assist_lockout && s_mode_cur != modes::Id::assist
                          && s_mode_cur != modes::Id::takeoff) return "!LOCK";
+    if (!config::flight_enabled) {
+        switch(s_mode_cur) {
+            case modes::Id::assist: return "B-ASSIST";
+            case modes::Id::takeoff: return "B-TKOFF";
+            default: return "B-MANUAL";
+        }
+    }
     const bool armed = s_arming.armed();
     switch (s_mode_cur) {
         case modes::Id::assist:  return armed ? "ASSIST" : "ASSIST*";
@@ -201,31 +204,29 @@ const char* fm_string()
     }
 }
 
-void task_crsf_tx()   // 10 Hz -- FC -> handset telemetry over the CRSF uplink
+void task_crsf_tx()   // 100 Hz service; per-type due times and byte budget
 {
-    if (!crsf::receiving()) return;   // no link -> nothing to send
-
-    // attitude + vario every tick; GPS and flight-mode interleaved (~2.5 Hz each)
-    crsf::send_attitude(ahrs::pitch_rad(), ahrs::roll_rad(), ahrs::yaw_rad());
-    crsf::send_vario(g_climb_mps);
-
-    static uint8_t phase = 0;
-    switch (phase++ & 0x03) {
-        case 0: {
+    const uint32_t now=millis(),seq=ublox::fix_sequence();
+    const char* mode=fm_string();
+    const auto kind=s_telemetry.choose(now,imu_v2::healthy(),bmp581::healthy(),
+                                      ublox::locked(),seq,mode,crsf::receiving());
+    bool sent=false;
+    switch(kind) {
+        case core::TelemKind::attitude:
+            sent=crsf::send_attitude(ahrs::pitch_rad(),ahrs::roll_rad(),ahrs::yaw_rad()); break;
+        case core::TelemKind::vario: sent=crsf::send_vario(g_climb_mps); break;
+        case core::TelemKind::gps: {
             crsf::GpsTelem g;
-            g.lat_1e7     = (int32_t)(ublox::lat_deg() * 1e7);
-            g.lon_1e7     = (int32_t)(ublox::lon_deg() * 1e7);
-            g.ground_mps  = ublox::speed_kmh() * (1.0f / 3.6f);
-            g.heading_deg = 0.0f;                       // no course-over-ground yet
-            g.altitude_m  = ublox::alt_m();
-            g.sats        = (uint8_t)ublox::sats();
-            crsf::send_gps(g);
-            break;
+            g.lat_1e7=int32_t(ublox::lat_deg()*1e7); g.lon_1e7=int32_t(ublox::lon_deg()*1e7);
+            g.ground_mps=ublox::speed_kmh()/3.6f; g.heading_deg=ublox::course_deg();
+            g.altitude_m=ublox::alt_m(); g.sats=uint8_t(ublox::sats());
+            sent=crsf::send_gps(g); break;
         }
-        case 2:
-            crsf::send_flight_mode(fm_string());
-            break;
+        case core::TelemKind::mode: sent=crsf::send_flight_mode(mode); break;
+        default: return;
     }
+    // Only scheduling state is retained. A retry always builds CURRENT values.
+    s_telemetry.result(kind,sent,now,seq,mode);
 }
 
 void task_control()   // 400 Hz -- CRSF -> arming/failsafe -> mode -> mixer -> PWM
@@ -233,6 +234,7 @@ void task_control()   // 400 Hz -- CRSF -> arming/failsafe -> mode -> mixer -> P
     static uint32_t last_us = 0;
     const uint32_t now_us = micros();
     const float dt_s = (last_us == 0) ? 0.0025f : (float)(now_us - last_us) * 1e-6f;
+    if (last_us && dt_s > 0.02f && s_flight_session) s_control_fault=true;
     last_us = now_us;
 
     const crsf::Channels& ch = crsf::channels();
@@ -250,125 +252,93 @@ void task_control()   // 400 Hz -- CRSF -> arming/failsafe -> mode -> mixer -> P
     ai.arm_switch      = ch.us[kArmCh] > kArmHi;
     ai.throttle        = sticks.throttle;
     ai.failsafe_active = s_failsafe.active();
+    ai.permitted = config::flight_enabled && s_output_ready && !s_control_fault;
     s_arming.update(ai);
 
     const bool armed = s_arming.armed();
 
-    // "flying" latch: set once armed AND (throttle clearly applied OR moving),
-    // held until disarm. Gates the stabilizer integrators so they never wind
-    // against a stationary airframe (armed on the bench = frozen; the moment
-    // you spool up or roll, they arm and re-preset bumplessly).
-    if (s_sim_flying) {
-        s_flying = true;                          // bench override (SIM_FLYING)
-    } else if (!armed) {
-        s_flying = false;
-    } else if (sticks.throttle > kFlyThrottle ||
-               (ublox::speed_kmh() * (1.0f / 3.6f)) > kFlyGroundSpeedMps) {
-        s_flying = true;
-    }
+    // Debounced integration eligibility; explicit disarm/confirmed landing
+    // clear it. Session pressure reference and fault latches are independent.
+    if (armed) s_flight_session=true;
+    s_flying=s_flight_state.update(armed,s_failsafe.active(),sticks.throttle,
+        ublox::speed_valid(),ublox::speed_kmh()/3.6f,bmp581::healthy(),g_climb_mps,
+        sqrtf(g_gx*g_gx+g_gy*g_gy+g_gz*g_gz),millis());
+    // Session/ground datum stay latched across airborne disarm and RC loss.
+    const bool imu_ok=imu_v2::healthy();
+    s_bmi_ready=imu_ok;
+    if (s_failsafe.active()) sticks={}; // level roll/pitch, zero yaw rate, idle
 
     // --- mode manager: resolve request -> permitted mode, switch bumplessly ---
-    set_mode(resolve_mode(s_mode_req, s_bmi_ready, s_imu_prep.bias_ready(),
+    set_mode(resolve_mode(s_mode_req, imu_ok, imu_v2::bias_ready(),
                           s_failsafe.active()));
 
     modes::ModeInput mi;
     mi.sticks       = sticks;
-    mi.dt_s         = dt_s;
+    mi.dt_s         = fminf(fmaxf(dt_s,0.0005f),0.01f);
     mi.roll_rad     = ahrs::roll_rad();
     mi.pitch_rad    = ahrs::pitch_rad();
     mi.yaw_rad      = ahrs::yaw_rad();
     mi.gyro_p_dps   = g_gx;   // bias-corrected + LPF'd body rates from task_bmi
     mi.gyro_q_dps   = g_gy;
     mi.gyro_r_dps   = g_gz;
-    mi.airspeed_mps = fmaxf(ublox::speed_kmh() / 3.6f, kAirspeedFloorMps);
+    mi.airspeed_mps = 0.0f; mi.airspeed_valid=false; // no pitot fitted
     mi.allow_integrators = s_flying;
     s_mode_active->update(mi, s_out);
 
-    // "gyro-bias cal complete" signal: on the rising edge of bias_ready, while
-    // disarmed, sweep aileron -> elevator -> rudder once so the pilot sees it.
-    static bool prev_bias_ready = false;
-    const bool bias_ready = s_imu_prep.bias_ready();
-    if (bias_ready && !prev_bias_ready) {
-        L().println(F("CAL_DONE,gyro_bias"));            // one-shot marker
-        if (!armed) s_surface_test.start();
-    }
-    prev_bias_ready = bias_ready;
-    if (armed) s_surface_test.cancel();
-
-    float sw_r, sw_p, sw_y;
-    const bool sweeping = s_surface_test.step(dt_s, sw_r, sw_p, sw_y);
+    // No automatic surface sweep at boot/calibration completion.
 
     const bool fs = s_failsafe.active();
     for (int i = 0; i < 8; i++) {
         const bool is_thr = (i == 6 || i == 7);
         uint16_t us;
-        if (sweeping && !is_thr) {                      // surface sweep overrides (disarmed)
-            const float d = (i <= 1) ? sw_r : (i <= 3) ? sw_p : sw_y;
-            us = s_srv[i].from_norm(d);
-        }
-        else if (fs)                us = s_srv[i].safe_us(is_thr);
-        else if (is_thr && !armed)  us = s_srv[i].safe_us(true);          // motors off
-        else if (is_thr)            us = s_srv[i].from_unipolar(s_out.ch[i]);
-        else                        us = s_srv[i].from_norm(s_out.ch[i]);
+        if (is_thr && (fs || !armed)) us=s_srv[i].safe_us(true);
+        else if (fs && (!imu_ok || s_assist_lockout || !imu_v2::bias_ready())) us=s_srv[i].safe_us(false);
+        else if (is_thr) us=s_srv[i].from_unipolar(s_out.ch[i]);
+        else us=s_srv[i].from_norm(s_out.ch[i]);
         s_out_us[i] = us;
-        if (i < 4) hal::pwm_write_us(hal::PwmGroup::out_1_4, (uint8_t)i,       us);
-        else       hal::pwm_write_us(hal::PwmGroup::out_5_8, (uint8_t)(i - 4), us);
+        const auto group=i<2?hal::PwmGroup::ailerons:i<6?hal::PwmGroup::tail:hal::PwmGroup::motors;
+        const uint8_t channel=i<2?i:i<6?i-2:i-6;
+        if(hal::pwm_write_us(group,channel,us)!=hal::Status::ok) s_output_ready=false;
     }
 }   // OUT USB line is emitted from task_stream
 
-void task_bmi_probe()   // 2 Hz -- cheap liveness poll while the IMU is down
+void task_bmi() // 400 Hz FIFO service, both BMI270s
 {
-    // Never runs the ~ms Bosch re-init from a scheduler pass once flying, and
-    // only runs it at all after a cheap chip-id read confirms the part is back.
-    if (s_bmi_ready || s_flying) return;
-    if (bmi323::raw_chip_id() != 0x43) return;
-    s_bmi_ready = bmi323::begin();
-    L().println(s_bmi_ready ? F("BMI_STATUS,1") : F("BMI_STATUS,0"));
+    imu_v2::poll(!s_flight_session);
+    const auto& p=imu_v2::latest();
+    g_ax=p.ax_g; g_ay=p.ay_g; g_az=p.az_g;
+    g_gx=p.gx_dps; g_gy=p.gy_dps; g_gz=p.gz_dps;
+    if(imu_v2::healthy()) s_att_last_us=micros();
 }
-
-void task_bmi()   // 200 Hz (critical) -- read IMU, prep, run the gated AHRS
+void task_mag()
 {
-    if (!s_bmi_ready) return;
-
-    bmi323::Sample s;
-    const bmi323::Result r = bmi323::read(s);
-    if (r == bmi323::Result::comm_error) {
-        s_bmi_ready = false;              // task_bmi_probe picks it up (if not flying)
-        L().println(F("BMI_STATUS,0"));
-        return;
+    mag350::Sample m;
+    if(mag350::poll(m)) {
+        L().print(F("MAG,")); L().print(m.x_ut,2); L().print(',');
+        L().print(m.y_ut,2); L().print(','); L().println(m.z_ut,2);
     }
-    if (r != bmi323::Result::ok) return;  // no_data -> keep last values
-
-    const uint32_t now_us = micros();
-    const float dt_s = (s_att_last_us == 0) ? 0.01f
-                                            : (float)(now_us - s_att_last_us) * 1e-6f;
-    s_att_last_us = now_us;
-
-    // bias-correct + low-pass, then run the gated AHRS
-    const estimation::ImuSample p = s_imu_prep.process(
-        s.gx_dps, s.gy_dps, s.gz_dps, s.ax_g, s.ay_g, s.az_g, dt_s);
-    ahrs::update(p.ax_g, p.ay_g, p.az_g, p.gx_dps, p.gy_dps, p.gz_dps, dt_s);
-
-    g_ax = p.ax_g;   g_ay = p.ay_g;   g_az = p.az_g;
-    g_gx = p.gx_dps; g_gy = p.gy_dps; g_gz = p.gz_dps;
-}   // BMI/ATT USB lines are emitted from task_stream, off the sample path
+    // No uncalibrated magnetic heading is fused into flight control.
+}
 
 void task_stream()   // 20 Hz -- all the high-rate USB echo, off the control path
 {
-    // IMU (bias-corrected, filtered)
-    L().print(F("BMI,"));
-    L().print(g_ax, 4);   L().print(',');
-    L().print(g_ay, 4);   L().print(',');
-    L().print(g_az, 4);   L().print(',');
-    L().print(g_gx, 2);   L().print(',');
-    L().print(g_gy, 2);   L().print(',');
-    L().println(g_gz, 2);
+    if(imu_v2::healthy()) {
+        // IMU (bias-corrected, filtered)
+        L().print(F("BMI,"));
+        L().print(g_ax, 4);   L().print(',');
+        L().print(g_ay, 4);   L().print(',');
+        L().print(g_az, 4);   L().print(',');
+        L().print(g_gx, 2);   L().print(',');
+        L().print(g_gy, 2);   L().print(',');
+        L().println(g_gz, 2);
 
-    // attitude
-    L().print(F("ATT,"));
-    L().print(ahrs::roll_rad()  * kRadToDeg, 1); L().print(',');
-    L().print(ahrs::pitch_rad() * kRadToDeg, 1); L().print(',');
-    L().println(ahrs::yaw_rad() * kRadToDeg, 1);
+        // attitude
+        L().print(F("ATT,"));
+        L().print(ahrs::roll_rad()  * kRadToDeg, 1); L().print(',');
+        L().print(ahrs::pitch_rad() * kRadToDeg, 1); L().print(',');
+        L().println(ahrs::yaw_rad() * kRadToDeg, 1);
+
+    } // Suppress normal attitude samples when unhealthy; GUI expires old data.
 
     // servo / ESC outputs
     L().print(F("OUT"));
@@ -386,7 +356,7 @@ void task_stream()   // 20 Hz -- all the high-rate USB echo, off the control pat
     }
 }
 
-void task_bmp()   // 50 Hz -- driver self-gates the ~10 Hz trigger/collect
+void task_bmp()   // 100 Hz poll, consume fresh normal-mode 50 Hz pressure samples
 {
     bmp581::Sample bs;
     if (!bmp581::poll(bs)) return;
@@ -398,7 +368,7 @@ void task_bmp()   // 50 Hz -- driver self-gates the ~10 Hz trigger/collect
     g_alt_m     = alt;
 
     // ground reference: track the latest pressure while disarmed, freeze on arm.
-    if (!s_arming.armed()) s_baro_alt.set_ground(p_pa);
+    if (!s_flight_session) s_baro_alt.set_ground(p_pa);
     g_alt_agl_m = s_baro_alt.alt_m(p_pa);
 
     // climb rate: filtered derivative of AGL (feeds the CRSF vario)
@@ -409,7 +379,7 @@ void task_bmp()   // 50 Hz -- driver self-gates the ~10 Hz trigger/collect
         const float dt = (float)(now_ms - s_climb_ms) * 1e-3f;
         if (dt > 1e-3f) {
             const float raw = (g_alt_agl_m - s_climb_agl) / dt;
-            g_climb_mps += 0.08f * (raw - g_climb_mps);   // ~0.7 Hz LPF at 50 Hz
+            g_climb_mps += (dt / (0.2274f + dt)) * (raw - g_climb_mps);   // ~0.7 Hz LPF at 50 Hz
         }
     }
     s_climb_ms  = now_ms;
@@ -421,8 +391,34 @@ void task_bmp()   // 50 Hz -- driver self-gates the ~10 Hz trigger/collect
     L().println(alt, 2);
 }
 
+void imu_log(unsigned i,uint32_t stamp,uint32_t seq,uint32_t clock,const float* raw,const estimation::ImuSample& p)
+{
+    if(!sd_bin_log::ok()) return;
+    core::ImuLogFrame f; f.host_us=stamp; f.sequence=seq; f.sensor_time=clock; f.sensor=uint8_t(i); f.flags=p.bias_ready?1:0;
+    const float filtered[6]={p.gx_dps,p.gy_dps,p.gz_dps,p.ax_g,p.ay_g,p.az_g};
+    for(unsigned axis=0;axis<6;++axis) {
+        const float scale=axis<3?core::kLogGyrScale:core::kLogAccScale;
+        f.raw[axis]=core::log_i16(raw[axis],scale); f.filtered[axis]=core::log_i16(filtered[axis],scale);
+    }
+    core::finish_diagnostic(f); s_log_ring.push(&f,sizeof(f));
+}
+
+void task_control_log() // 100 Hz setpoint/output diagnostics
+{
+    if(!sd_bin_log::ok()) return;
+    core::ControlLogFrame f; f.host_us=micros();
+    f.demand[0]=core::log_i16(s_mode_cur==modes::Id::assist?s_mode_assist.demand_p():s_mode_cur==modes::Id::takeoff?s_mode_takeoff.demand_p():0,16);
+    f.demand[1]=core::log_i16(s_mode_cur==modes::Id::assist?s_mode_assist.demand_q():0,16);
+    f.measured[0]=core::log_i16(g_gx,16); f.measured[1]=core::log_i16(g_gy,16); f.measured[2]=core::log_i16(g_gz,16);
+    for(unsigned axis=0;axis<3;++axis) f.surface[axis]=core::log_i16(s_out.ch[axis*2],10000);
+    f.throttle=uint16_t(s_out.ch[6]*10000); f.mode=uint8_t(s_mode_cur);
+    f.flags=(s_arming.armed()?1:0)|(s_failsafe.active()?2:0)|(s_flying?4:0);
+    core::finish_diagnostic(f); s_log_ring.push(&f,sizeof(f));
+}
+
 void task_log()   // 50 Hz -- pack one binary frame into the ring (non-blocking)
 {
+    if(!sd_bin_log::ok()) return;
     core::LogFrame f;
     memset(&f, 0, sizeof(f));
     f.t_ms = millis();
@@ -459,30 +455,17 @@ void task_log()   // 50 Hz -- pack one binary frame into the ring (non-blocking)
     s_log_ring.push(&f, sizeof(f));   // drops + counts if the ring is full
 }
 
-void task_log_flush()   // 5 Hz -- drain to SD; blocking lives here, isolated
+void task_log_flush()   // 4 kHz -- bounded asynchronous SD service
 {
-    // Blocking SD path, ~20 ms/s of unavoidable card-busy time (inflow-bound).
-    // Measured worst_pass_us vs flush config: 1 Hz/8 kB = 43 ms (one deep drain/s,
-    // 16 missed rate-loop cycles -- too long); 25 Hz/512 B and 5 Hz/2 kB both
-    // ~15 ms (one sector's worst flash-program tail -- the floor for a blocking
-    // path). 5 Hz/2 kB has the fewest discrete stalls at that floor: normal call
-    // writes ~1 sector, a backed-up 16 kB ring clears in a few. Real fix for the
-    // 15 ms tail: a non-blocking SD write path.
-    sd_bin_log::flush_step(2048);
-
-    // Commit the FAT/dir, but ONLY on the ground -- f_sync() is a ~30 ms blocking
-    // multi-block op. In flight the sector writes still land on the card; the
-    // dir entry is refreshed the moment we stop (disarm / not flying) and on a
-    // normal landing the file closes clean. A hard power loss mid-flight leaves
-    // the data on the card but the dir size stale (raw-sector recovery).
-    static uint32_t l_sync = 0;
-    const uint32_t now = millis();
-    if (!s_flying && (now - l_sync) >= 3000) { l_sync = now; sd_bin_log::sync(); }
+    if(config::enable_sd_logging) sd_bin_log::flush_step(512);
 }
 
 void task_debug()   // 2 Hz -- low-rate status lines (no blocking calls here)
 {
     const uint32_t now = millis();
+    L().print(F("TELEM,"));
+    for(unsigned i=0;i<4;++i) { L().print(s_telemetry.sent[i]); L().print(','); }
+    L().print(s_telemetry.deferred); L().print(','); L().println(s_telemetry.queue_failures);
     const bool bringup = now < 25000;   // GPS bring-up dumps only for the first 25 s
 
     static uint32_t l_dbg = 0;
@@ -528,7 +511,7 @@ void task_debug()   // 2 Hz -- low-rate status lines (no blocking calls here)
 
     static uint32_t l_sd = 0;
     if ((now - l_sd) >= 5000) {
-        l_sd = now;                                  // f_sync() now lives in task_log_flush
+        l_sd = now;                                  // SD runtime service is asynchronous
         L().print(F("SD_DBG,"));
         L().print(sd_bin_log::ok() ? 1 : 0);         L().print(F(","));
         L().print(sd_bin_log::name());               L().print(F(",bytes="));
@@ -542,7 +525,10 @@ void task_debug()   // 2 Hz -- low-rate status lines (no blocking calls here)
     if ((now - l_est) >= 1000) {
         l_est = now;
         float bx, by, bz; ahrs::gyro_bias_dps(bx, by, bz);
-        L().print(F("EST,bias_ready="));   L().print(s_imu_prep.bias_ready() ? 1 : 0);
+        L().print(F("IMU_HEALTH,")); L().print(imu_v2::sensor_healthy(0)); L().print(',');
+        L().print(imu_v2::sensor_healthy(1)); L().print(','); L().print(imu_v2::active()); L().print(','); L().print(imu_v2::ambiguous());
+        L().print(','); L().println(imu_v2::healthy());
+        L().print(F("EST,bias_ready="));   L().print(imu_v2::bias_ready() ? 1 : 0);
         L().print(F(",gbias="));           L().print(bx, 2); L().print('/');
         L().print(by, 2); L().print('/');  L().print(bz, 2);
         L().print(F(",acc_trust="));       L().print(ahrs::acc_trust(), 2);
@@ -571,6 +557,8 @@ void task_debug()   // 2 Hz -- low-rate status lines (no blocking calls here)
         L().print(F(",armed="));       L().print(s_arming.armed() ? 1 : 0);
         L().print(F(",failsafe="));    L().print((int)s_failsafe.level());
         L().print(F(",assist_lockout=")); L().print(s_assist_lockout ? 1 : 0);
+        L().print(F(",flight_enabled=")); L().print(config::flight_enabled ? 1 : 0);
+        L().print(F(",timing_fault=")); L().print(s_control_fault ? 1 : 0);
         L().print(F(",flying="));          L().print(s_flying ? 1 : 0);
         L().println();
     }
@@ -597,27 +585,28 @@ void task_sched_report()   // 1 Hz -- per-task DWT timing + overruns
 // Bench command reader over USB CDC. Newline-terminated tokens:
 //   RESET_STATS   -- zero the scheduler counters for a clean measurement window
 //   REBOOT_BL     -- jump to the STM32 system bootloader (DFU) without the button
-//   SIM_FLYING 0|1 -- bench: force the "flying" latch (f_sync off, integrators armed)
 void task_cmd()   // 10 Hz
 {
     static char buf[24];
     static uint8_t len = 0;
+    static bool overflow=false;
     for (int guard = 0; guard < 128; guard++) {   // bounded drain
         const int c = usb_stream::read();
         if (c < 0) break;
         if (c == '\r') continue;
         if (c == '\n') {
+            if(overflow) { overflow=false; len=0; L().println(F("NAK,OVERFLOW")); continue; }
             buf[len] = 0;
             if      (!strcmp(buf, "RESET_STATS")) { sched::reset_stats(); L().println(F("ACK,RESET_STATS")); }
-            else if (!strcmp(buf, "REBOOT_BL"))   { L().println(F("ACK,REBOOT_BL")); hal::delay_ms(50); hal::jump_to_bootloader(); }
-            else if (!strcmp(buf, "SIM_FLYING 1")) { s_sim_flying = true;  L().println(F("ACK,SIM_FLYING,1")); }
-            else if (!strcmp(buf, "SIM_FLYING 0")) { s_sim_flying = false; L().println(F("ACK,SIM_FLYING,0")); }
+            else if (!strcmp(buf, "REBOOT_BL") && !s_flight_session && !s_arming.armed()) { L().println(F("ACK,REBOOT_BL")); hal::jump_to_bootloader(); }
             else if (len)                         { L().print(F("NAK,")); L().println(buf); }
             len = 0;
+        } else if (overflow) {
+            continue;
         } else if (len < sizeof(buf) - 1) {
             buf[len++] = (char)c;
         } else {
-            len = 0;   // overflow -> drop the line
+            len = 0; overflow=true;
         }
     }
 }
@@ -627,49 +616,47 @@ void task_cmd()   // 10 Hz
 void setup()
 {
     hal::init();
+    const auto reset=hal::reset_cause();
+    const bool watchdog_reset=reset==hal::ResetCause::iwdg || reset==hal::ResetCause::wwdg;
+    if(watchdog_reset) { s_control_fault=true; s_assist_lockout=true; hal::watchdog_kick(); }
 
     usb_stream::begin();
     ublox::begin(kGpsBootBaud);
-    crsf::begin(420000);   // ER8 on USART3 (PB11 rx / PB10 tx), 420000 8N1
+    crsf::begin(420000);   // ER8 on J2 / UART4 (PA1 rx / PA0 tx), 420000 8N1
 
-    // Bounded wait for the USB host, draining the u-blox boot burst meanwhile.
-    for (int i = 0; i < 300 && !usb_stream::host_ready(); i++) {
-        ublox::drain_rx();
-        hal::delay_ms(10);
+    s_log=&usb_stream::log();
+    L().println(F("boot: v2.2 dual BMI270/BMP581/BMM350/SAM-M10Q; development build"));
+    L().println(config::flight_enabled?F("FLIGHT_GATE,enabled"):F("FLIGHT_GATE,bench_motor_inhibit"));
+    // Define outputs and idle before sensor/storage bring-up, without a USB wait.
+    for(unsigned i=0;i<8;++i) {
+        s_srv[i].min_us=config::servo_min[i]; s_srv[i].center_us=config::servo_center[i];
+        s_srv[i].max_us=config::servo_max[i]; s_srv[i].reversed=config::servo_reverse[i];
     }
-    hal::delay_ms(100);
-    ublox::drain_rx();
-
-    s_log = &usb_stream::log();
-    L().println(F("boot: BMP581 + BMI323 + uBlox + CRSF + SD (scheduled) -- MANUAL"));
-
-    // IMU preconditioning: 200 Hz sample (== AHRS rate, half the SPI load of
-    // matching the 400 Hz rate loop; FIFO decimation to ~1 kHz is the next
-    // step). 30/15 Hz gyro/accel LPF. Gyro bias calibrates over a 4 s
-    // stationary window -- keep the board still for the first few seconds.
-    s_imu_prep.configure(200.0f, 30.0f, 15.0f, 4.0f);
-    ahrs::reset();
-
-    // Bring the IMU up here (bounded), not from a scheduler pass -- the Bosch
-    // re-init is ~ms of blocking. task_bmi_probe handles a later hot-plug.
-    for (int i = 0; i < 4 && !s_bmi_ready; i++) {
-        s_bmi_ready = bmi323::begin();
-        if (!s_bmi_ready) hal::delay_ms(40);
+    s_output_ready=hal::pwm_config(hal::PwmGroup::ailerons,config::pwm_hz_ailerons)==hal::Status::ok;
+    s_output_ready=(hal::pwm_config(hal::PwmGroup::tail,config::pwm_hz_tail)==hal::Status::ok)&&s_output_ready;
+    s_output_ready=(hal::pwm_config(hal::PwmGroup::motors,config::pwm_hz_motors)==hal::Status::ok)&&s_output_ready;
+    for(unsigned i=0;i<8;++i) {
+        const auto group=i<2?hal::PwmGroup::ailerons:i<6?hal::PwmGroup::tail:hal::PwmGroup::motors;
+        s_output_ready=(hal::pwm_write_us(group,i<2?i:i<6?i-2:i-6,s_srv[i].safe_us(i>=6))==hal::Status::ok)&&s_output_ready;
     }
-    L().println(s_bmi_ready ? F("BMI_STATUS,1") : F("BMI_STATUS,0"));
+    hal::delay_ms(5); // sensor power rails settle, startup only
+    s_bmi_ready=!watchdog_reset && imu_v2::begin();
+    L().println(s_bmi_ready?F("BMI_STATUS,1"):F("BMI_STATUS,0"));
 
     // ASSIST (FBWA): stick -> clamped attitude angle -> rate loop -> mixer.
     // Rough first gains, verified only in SITL (--assist-check) -- FF-dominant
-    // per CLAUDE.md, small P, light I. Tune in flight. See docs/DECISIONS.md.
+    // small P, light I. Actual airframe tuning/qualification remains outstanding.
     {
-        control::AttitudeCtrlConfig att;                 // defaults (110 dps/rad, turn-comp on)
+        control::AttitudeCtrlConfig att; // body-rate turn geometry; no GPS-as-airspeed
         control::RateCtrlConfig rate;
         rate.sample_hz = 400.0f;                         // == task_control rate
         rate.roll.kff = 0.006f; rate.roll.kp = 0.010f; rate.roll.ki = 0.02f;
         rate.roll.i_max = 0.4f; rate.roll.d_lpf_hz = 25.0f;
         rate.pitch = rate.roll; rate.pitch.kff = 0.010f; rate.pitch.kp = 0.020f;
         rate.yaw   = rate.roll; rate.yaw.kff = 0.004f; rate.yaw.kp = 0.006f; rate.yaw.ki = 0.0f;
-        s_mode_assist.configure(att, rate, 0.70f, 0.45f, 80.0f);  // max roll/pitch rad, max yaw-rate dps
+        s_mode_assist.set_tuning(config::assist_tuning);
+        s_mode_takeoff.set_tuning(config::assist_tuning);
+        s_mode_assist.configure(att, rate, 0.70f, 0.45f);  // roll/pitch limits, radians
 
         // TKOFF: roll wing-leveller only (pitch/yaw/throttle manual). Reuse the
         // ASSIST roll rate gains; small bank authority and a gentle rate demand
@@ -684,17 +671,13 @@ void setup()
                                             // only; you keep the stick centred on takeoff
     }
 
-    // Servo / ESC PWM. SrvChannel defaults (1000/1500/2000) suit surfaces and,
-    // via from_unipolar(), the ESCs (min 1000 = off). Per-airframe trim /
-    // reverse is set later.
-    hal::pwm_config(hal::PwmGroup::out_1_4, kServoHz);
-    hal::pwm_config(hal::PwmGroup::out_5_8, kServoHz);
-
-    const bool bmp_ok = bmp581::begin();     // init once, not retried
+    const bool bmp_ok = !watchdog_reset && bmp581::begin();
     L().println(bmp_ok ? F("BMP_STATUS,1") : F("BMP_STATUS,0"));
     ublox::drain_rx();
 
-    switch (sd_bin_log::begin(s_log_ring)) {
+    const bool mag_ok=!watchdog_reset && mag350::begin();
+    L().println(mag_ok?F("MAG_STATUS,1"):F("MAG_STATUS,0"));
+    if(config::enable_sd_logging && !watchdog_reset) switch (sd_bin_log::begin(s_log_ring)) {
         case sd_bin_log::Result::ok:
             L().print(F("SD_STATUS,1,")); L().println(sd_bin_log::name()); break;
         case sd_bin_log::Result::open_failed:
@@ -703,27 +686,33 @@ void setup()
             L().println(F("SD_STATUS,0,begin_failed")); break;
     }
 
+    imu_v2::set_observer(imu_log);
+    s_telemetry.configure(config::telemetry);
+
     // Critical chain first (marked *): it runs at the top of every pass and is
-    // re-serviced after any slow non-critical task, so the logger / debug
-    // prints / a slow SD write cannot stall the rate loop. bmi writes g_*/ahrs
-    // before control reads them.
-    sched::add("bmi",      200, task_bmi,     /*critical=*/true);
+    // re-serviced after slow non-critical tasks. This is cooperative, not
+    // preemptive: blocking I/O can still stall everything. SD runtime service is asynchronous.
+    // BMI writes g_*/ahrs before control reads them.
+    sched::add("crsf",     400, task_crsf, true);
+    sched::add("bmi",      400, task_bmi,     /*critical=*/true);
     sched::add("control",  400, task_control, /*critical=*/true);
 
-    sched::add("crsf",     100, task_crsf);       // RC parse (no USB echo here)
     sched::add("gps",       50, task_gps);
-    sched::add("crsf_tx",   10, task_crsf_tx);    // FC -> handset telemetry
-    sched::add("bmi_probe",  2, task_bmi_probe);  // cheap IMU hot-plug poll
-    sched::add("bmp",       50, task_bmp);
+    sched::add("crsf_tx",  100, task_crsf_tx);    // FC -> handset telemetry
+    sched::add("mag",       50, task_mag);
+    sched::add("bmp",      100, task_bmp);
+    sched::add("ctl_log",  100, task_control_log);
     sched::add("log",       50, task_log);        // pack frame -> ring (fast)
-    sched::add("log_flush",  5, task_log_flush);  // ring -> SD + f_sync (blocking, isolated)
+    sched::add("log_flush",4000,task_log_flush); // no filesystem calls, no polling waits
     sched::add("stream",    20, task_stream);     // BMI/ATT/OUT/RC USB echo
     sched::add("cmd",       10, task_cmd);        // USB bench commands
     sched::add("debug",      2, task_debug);      // low-rate status lines
     sched::add("sched",      1, task_sched_report);
 
-    // IWDG stays off until MANUAL exists to fall back into on a watchdog reset.
-    // sched::set_watchdog_ms(1000);
+    // A stuck cooperative task cannot leave the last PWM command forever.
+    // Watchdog recovery skips slow sensor/storage initialization and keeps
+    // motors inhibited; RC surface passthrough remains available.
+    sched::set_watchdog_ms(100);
 
     sched::run();   // never returns
 }

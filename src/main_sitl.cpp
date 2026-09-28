@@ -101,7 +101,7 @@ int main(int argc, char** argv)
         rc.roll.i_max = 0.4f;  rc.roll.d_lpf_hz = 25.0f;
         rc.pitch = rc.roll;    rc.pitch.kff = 0.010f; rc.pitch.kp = 0.020f;
         rc.yaw   = rc.roll;    rc.yaw.kff  = 0.004f;  rc.yaw.kp  = 0.006f; rc.yaw.ki = 0.0f;
-        mode_assist.configure(ac, rc, 0.70f, 0.45f, 80.0f);
+        mode_assist.configure(ac, rc, 0.70f, 0.45f);
         mode_takeoff.configure(rc.roll, rc.sample_hz, 110.0f, 120.0f, 0.175f);
     }
     modes::Mode* mode = takeoff ? static_cast<modes::Mode*>(&mode_takeoff)
@@ -162,7 +162,8 @@ int main(int argc, char** argv)
         mi.gyro_p_dps   = sn_prev.gx_dps;
         mi.gyro_q_dps   = sn_prev.gy_dps;
         mi.gyro_r_dps   = sn_prev.gz_dps;
-        mi.airspeed_mps = (float)ac.airspeed_mps();   // SITL has "airspeed"; on HW use GPS speed
+        mi.airspeed_mps = (float)ac.airspeed_mps();
+        mi.airspeed_valid = true; // simulated pitot; production has no pitot
 
         control::Outputs o;
         mode->update(mi, o);

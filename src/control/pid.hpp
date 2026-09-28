@@ -42,6 +42,10 @@ public:
     // Force I so that update(setpoint, measurement, dt) returns ~desired_out.
     void  preset_integrator(float setpoint, float measurement, float desired_out);
     void  reset();
+    void clear_integrator() { _i=0; }
+    // Undo integration which pushes further into an external actuator limit.
+    // Called after mixing, transition blending and surface slew limiting.
+    void track_applied(float requested,float applied);
 
     float p_term() const { return _p; }
     float i_term() const { return _i; }
@@ -55,7 +59,7 @@ private:
     float _d_filt    = 0.0f;
     bool  _primed    = false;
     bool  _integ_enabled = true;
-    float _p = 0.0f, _d = 0.0f;
+    float _p = 0.0f, _d = 0.0f, _i_before = 0.0f;
 };
 
 } // namespace control

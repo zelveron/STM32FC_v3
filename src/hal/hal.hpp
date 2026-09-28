@@ -29,10 +29,10 @@ enum class Status : int8_t {
 
 // Semantic peripheral IDs. The backend maps these to concrete instances / pins;
 // nothing above hal/ names a port, an alternate function, or a DMA stream.
-enum class SpiBus   : uint8_t { imu };              // PA4=CS PA5=SCK PA6=MISO PA7=MOSI
-enum class I2cBus   : uint8_t { baro };             // I2C1 PB6=SCL PB7=SDA
+enum class SpiBus   : uint8_t { imu, imu2 };
+enum class I2cBus   : uint8_t { baro, mag };
 enum class Uart     : uint8_t { gps, crsf };        // USART1 PA9/PA10 ; USART2 PA2/PA3
-enum class PwmGroup : uint8_t { out_1_4, out_5_8 }; // TIM4 PD12..15 ; TIM1 PE9/PE11/PE13/PE14
+enum class PwmGroup : uint8_t { ailerons, tail, motors }; // TIM3, TIM4, TIM1
 
 enum class PinMode : uint8_t { input, input_pullup, output };
 
@@ -48,6 +48,7 @@ namespace pins {
 // IMU chip-select. SCK/MISO/MOSI are owned by the SPI peripheral (SpiBus::imu)
 // and never touched as GPIO.
 extern const PinId imu_cs;
+extern const PinId imu2_cs;
 } // namespace pins
 
 // --------------------------------------------------------------------------
@@ -56,6 +57,7 @@ extern const PinId imu_cs;
 
 // Bring up anything the other hal calls assume. Call once, first thing.
 void init();
+bool board_configured();
 
 uint32_t micros();   // wraps ~1.19 h
 uint32_t millis();   // wraps ~49.7 days
@@ -120,7 +122,7 @@ bool   uart_tx_idle     (Uart u);
 // PWM servo / ESC output. (No caller yet -- Phase 2.)
 // --------------------------------------------------------------------------
 
-Status pwm_config  (PwmGroup g, uint32_t frame_hz);              // 200..333 for servos
+Status pwm_config  (PwmGroup g, uint32_t frame_hz);              // 50 Hz by default
 Status pwm_write_us(PwmGroup g, uint8_t channel /*0..3*/, uint16_t pulse_us);
 
 // --------------------------------------------------------------------------

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Live monitor for the STM32F407 BMP581 + BMI323 + uBlox streamer.
+Live monitor for the STM32F407 BMP581 + dual BMI270 + SAM-M10Q controller.
 
 Reads tagged CSV over USB CDC and shows:
-  - BMI323 connection status
+  - dual BMI270 connection status
   - BMP581: pressure / temperature / altitude
-  - BMI323: accel (g) and gyro (deg/s)
+  - dual BMI270: accel (g) and gyro (deg/s)
   - Attitude: roll / pitch / yaw (complementary filter) + artificial horizon
   - uBlox GNSS: position / altitude / satellites / fix
 
@@ -45,7 +45,8 @@ class MonitorApp:
         self.port = port
         self.q = queue.Queue()
         self._last_data = time.time()
-        root.title("BMI323 + BMP581 + GNSS Monitor")
+        self._last_att = self._last_bmp = self._last_gps = 0.0
+        root.title("dual BMI270 + BMP581 + GNSS Monitor")
         root.geometry("500x800")
         root.configure(bg="#1e1e1e")
 
@@ -64,7 +65,7 @@ class MonitorApp:
         self.blue = "#3b82f6"
 
         # --- BMI status header ---
-        self.status_var = tk.StringVar(value="BMI323: waiting...")
+        self.status_var = tk.StringVar(value="dual BMI270: waiting...")
         status_lbl = tk.Label(root, textvariable=self.status_var, font=("Helvetica", 14, "bold"),
                               bg=bg, fg=red)
         status_lbl.pack(pady=(12, 8))
@@ -114,7 +115,7 @@ class MonitorApp:
         self._row(bmp_frame, "Altitude", self.alt_var)
 
         # --- BMI section ---
-        bmi_frame = ttk.LabelFrame(root, text="BMI323 (IMU)")
+        bmi_frame = ttk.LabelFrame(root, text="dual BMI270 (IMU)")
         bmi_frame.pack(fill="x", padx=16, pady=6)
 
         self.acc_var = tk.StringVar(value="--, --, -- g")
@@ -202,6 +203,9 @@ class MonitorApp:
         c.delete("all")
         w = int(c["width"]); h = int(c["height"])
         cx, cy = w / 2.0, h / 2.0
+        if not self._last_att:
+            c.create_text(cx, cy, text="ATTITUDE UNAVAILABLE", fill="#e74c3c")
+            return
         roll = self._roll_deg
         pitch = self._pitch_deg
 
@@ -270,7 +274,22 @@ class MonitorApp:
         if time.time() - self._last_data > 3:
             self.footer_var.set("no data — reconnecting...")
 
+        self._expire_sensor_data(time.time())
         self.root.after(50, self._poll)
+
+    def _expire_sensor_data(self, now):
+        if now - self._last_att > 0.3:
+            self._last_att = 0
+            for var in (self.roll_var, self.pitch_var, self.yaw_var, self.acc_var, self.gyr_var):
+                var.set("STALE / unavailable")
+            self._draw_horizon()
+        if now - self._last_bmp > 0.3:
+            for var in (self.pressure_var, self.temp_var, self.alt_var):
+                var.set("STALE / unavailable")
+        if now - self._last_gps > 2.0:
+            self.fix_var.set("STALE / no valid fix")
+            for var in (self.pos_var, self.gps_alt_var, self.gps_speed_var):
+                var.set("--")
 
     def _handle_line(self, line):
         parts = line.split(",")
@@ -285,6 +304,9 @@ class MonitorApp:
                 a = float(parts[3])
             except ValueError:
                 return
+            if not all(math.isfinite(v) for v in (p, t, a)):
+                return
+            self._last_bmp = time.time()
             self.pressure_var.set(f"{p:.3f} hPa")
             self.temp_var.set(f"{t:.2f} °C")
             self.alt_var.set(f"{a:.2f} m")
@@ -304,6 +326,11 @@ class MonitorApp:
                 self._yaw_deg = float(parts[3])
             except ValueError:
                 return
+            if not all(math.isfinite(v) for v in (self._roll_deg, self._pitch_deg, self._yaw_deg)):
+                self._last_att = 0
+                self._expire_sensor_data(time.time())
+                return
+            self._last_att = time.time()
             self.roll_var.set(f"{self._roll_deg:+.1f} °")
             self.pitch_var.set(f"{self._pitch_deg:+.1f} °")
             self.yaw_var.set(f"{self._yaw_deg:+.1f} °")
@@ -319,7 +346,8 @@ class MonitorApp:
             req = kv.get("req", "--")
             self.mode_sub_var.set(f"requested {req}   ·   last change {self._last_mode_change}")
             armed = kv.get("armed") == "1"
-            self.armed_var.set("ARMED" if armed else "disarmed")
+            self.armed_var.set("BENCH - motors inhibited" if kv.get("flight_enabled") == "0"
+                               else "ARMED" if armed else "disarmed")
             fs = kv.get("failsafe", "0")
             self.failsafe_var.set("OK" if fs == "0" else f"ENGAGED (lvl {fs})")
             lock = kv.get("assist_lockout") == "1"
@@ -346,12 +374,12 @@ class MonitorApp:
             self.cal_var.set(f"done  (acc_trust {trust})" if ready
                              else f"calibrating…  hold still  (acc_trust {trust})")
             agl = kv.get("agl_m"); climb = kv.get("climb_mps")
-            if agl is not None:
+            if agl is not None and time.time() - self._last_bmp < 0.3:
                 extra = f"   ({float(climb):+.1f} m/s)" if climb is not None else ""
-                self.alt_var.set(f"{float(agl):.2f} m AGL{extra}")
+                self.alt_var.set(f"{float(agl):.2f} m relative{extra}")
 
         elif tag == "CAL_DONE":
-            self.cal_var.set("done  (surface sweep now)")
+            self.cal_var.set("done")
 
         elif tag == "RC" and len(parts) >= 17:
             try:
@@ -380,6 +408,11 @@ class MonitorApp:
                 spd = float(parts[7])
             except ValueError:
                 return
+            if fix <= 0 or not all(math.isfinite(v) for v in (lat, lon, alt, spd)):
+                self._last_gps = 0
+                self._expire_sensor_data(time.time())
+                return
+            self._last_gps = time.time()
             self.pos_var.set(f"{lat:.6f}, {lon:.6f}")
             self.gps_alt_var.set(f"{alt:.1f} m")
             self.sats_var.set(str(sats))
@@ -400,18 +433,27 @@ class MonitorApp:
             self.gps_time_var.set(t)
             self.gps_speed_var.set(f"{spd:.1f} km/h")
 
+        elif tag == "IMU_HEALTH" and len(parts) == 6:
+            h0, h1, active, ambiguous, valid = parts[1:]
+            self.status_var.set(f"IMUs {h0}/{h1}  active #{int(active)+1}" +
+                                ("  DISAGREE" if ambiguous == "1" else ""))
+            self.status_lbl.configure(fg=self.green if valid == "1" else self.red)
+            if valid != "1":
+                self._last_att = 0
+                self._expire_sensor_data(time.time())
+
         elif tag == "BMI_STATUS" and len(parts) == 2:
             self._connected = (parts[1] == "1")
             if self._connected:
-                self.status_var.set("BMI323: CONNECTED")
-                self.status_lbl.configure(fg=self.green)
+                self.status_var.set("BMI270 initialization OK; waiting for samples")
+                self.status_lbl.configure(fg=self.amber)
             else:
-                self.status_var.set("BMI323: NOT FOUND")
+                self.status_var.set("dual BMI270: NOT FOUND")
                 self.status_lbl.configure(fg=self.red)
 
 
 def main():
-    ap = argparse.ArgumentParser(description="BMI323 + BMP581 + GNSS monitor GUI")
+    ap = argparse.ArgumentParser(description="dual BMI270 + BMP581 + GNSS monitor GUI")
     ap.add_argument("--port", "-p", default=None, help="serial port (default: auto-detect)")
     args = ap.parse_args()
 

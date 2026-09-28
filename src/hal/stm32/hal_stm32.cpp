@@ -1,8 +1,8 @@
 //
 // hal_stm32.cpp -- STM32F407 / Arduino-core backend for hal::.
 //
-// This is the ONLY translation unit permitted to include Arduino / STM32 HAL /
-// CMSIS headers. Everything else reaches hardware through hal.hpp.
+// Hardware access for sensor/control modules. USB/SD and the Arduino entry
+// point also include framework headers at their boundary.
 //
 #include "../hal.hpp"
 
@@ -10,13 +10,16 @@
 #include <Wire.h>
 #include <SPI.h>
 #include <HardwareTimer.h>
+#include "board_pins.hpp"
 
 // ---------------------------------------------------------------------------
 // Named pins (declared extern in hal.hpp)
 // ---------------------------------------------------------------------------
-const hal::PinId hal::pins::imu_cs = PA4;   // SCK/MISO/MOSI = PA5/PA6/PA7 (SPI1)
+const hal::PinId hal::pins::imu_cs = board::imu1_cs;
+const hal::PinId hal::pins::imu2_cs = board::imu2_cs;
 
 namespace hal {
+bool board_configured() { return board::confirmed; }
 
 // ---------------------------------------------------------------------------
 // Lifecycle / time
@@ -28,6 +31,12 @@ void init()
     CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
     DWT->CYCCNT = 0;
     DWT->CTRL   |= DWT_CTRL_CYCCNTENA_Msk;
+    ::digitalWrite(board::imu1_cs,HIGH); ::pinMode(board::imu1_cs,OUTPUT);
+    ::digitalWrite(board::imu2_cs,HIGH); ::pinMode(board::imu2_cs,OUTPUT);
+    ::digitalWrite(PB0,HIGH); ::pinMode(PB0,OUTPUT); // unused W25Q16 deselected
+    ::digitalWrite(board::gps_enable,LOW); ::pinMode(board::gps_enable,OUTPUT);
+    ::digitalWrite(board::baro_enable,LOW); ::pinMode(board::baro_enable,OUTPUT);
+    ::digitalWrite(board::gps_reset,LOW); ::pinMode(board::gps_reset,OUTPUT);
 }
 
 uint32_t micros() { return ::micros(); }
@@ -44,16 +53,18 @@ void delay_us(uint32_t us) { ::delayMicroseconds(us); }
 void watchdog_start(uint32_t timeout_ms)
 {
     if (timeout_ms > 4095) timeout_ms = 4095;
+    IWDG->KR  = 0xCCCC;          // start LSI/watchdog before updating registers
     IWDG->KR  = 0x5555;          // enable register write access
     IWDG->PR  = 3;               // /32
     IWDG->RLR = timeout_ms;      // ~1 ms per tick
-    IWDG->KR  = 0xAAAA;          // reload
-    IWDG->KR  = 0xCCCC;          // start
+    const uint32_t started=::micros();
+    while(IWDG->SR && uint32_t(::micros()-started)<20000) {}
+    IWDG->KR  = 0xAAAA;          // reload after register synchronization
 }
 void watchdog_kick() { IWDG->KR = 0xAAAA; }
 
 // ---------------------------------------------------------------------------
-// GPIO (BMI323 bit-bang shim only)
+// GPIO
 // ---------------------------------------------------------------------------
 void gpio_config(PinId pin, PinMode mode)
 {
@@ -67,88 +78,80 @@ void gpio_write(PinId pin, bool level) { ::digitalWrite(pin, level ? HIGH : LOW)
 bool gpio_read (PinId pin)             { return ::digitalRead(pin) != LOW; }
 
 // ---------------------------------------------------------------------------
-// SPI -- SPI1 (PA5/PA6/PA7) for the BMI323, blocking. The transfer is a tight
-// polled LL loop inside the core (~1 byte / SPI clock), so a 27-byte IMU burst
-// at 5.25 MHz is ~45 us. DMA (spi_xfer_async) is a later optimisation.
+// SPI1 and SPI2: independent BMI270 buses. Transfers are synchronous.
+// Measure actual timing; a stuck peripheral is contained by the watchdog.
 // ---------------------------------------------------------------------------
-static SPISettings s_spi_settings;
-static bool        s_spi_ready = false;
+static SPIClass s_spi1(board::imu1_mosi,board::imu1_miso,board::imu1_sck);
+static SPIClass s_spi2(board::imu2_mosi,board::imu2_miso,board::imu2_sck);
+static SPISettings s_spi_settings[2];
+static bool s_spi_ready[2]={false,false};
+static SPIClass& spi_for(SpiBus bus) { return bus==SpiBus::imu ? s_spi1 : s_spi2; }
 
-Status spi_config(SpiBus bus, uint32_t hz, uint8_t mode)
+Status spi_config(SpiBus bus,uint32_t hz,uint8_t mode)
 {
-    if (bus != SpiBus::imu) return Status::unsupported;
-    const uint8_t m = (mode == 0) ? SPI_MODE0 : (mode == 1) ? SPI_MODE1
-                    : (mode == 2) ? SPI_MODE2 : SPI_MODE3;
-    s_spi_settings = SPISettings(hz, MSBFIRST, m);
-    SPI.setMOSI(PA7);
-    SPI.setMISO(PA6);
-    SPI.setSCLK(PA5);
-    SPI.begin();
-    s_spi_ready = true;
-    return Status::ok;
+    if (!board_configured()) return Status::unsupported;
+    const unsigned i=static_cast<unsigned>(bus);
+    if(i>1) return Status::unsupported;
+    const uint8_t m=mode==0?SPI_MODE0:mode==1?SPI_MODE1:mode==2?SPI_MODE2:SPI_MODE3;
+    s_spi_settings[i]=SPISettings(hz,MSBFIRST,m);
+    spi_for(bus).begin(); s_spi_ready[i]=true; return Status::ok;
 }
-
-Status spi_xfer(SpiBus bus, PinId cs, const uint8_t* tx, uint8_t* rx, size_t n)
+Status spi_xfer(SpiBus bus,PinId cs,const uint8_t* tx,uint8_t* rx,size_t n)
 {
-    if (bus != SpiBus::imu || !s_spi_ready || n == 0) return Status::error;
-
-    SPI.beginTransaction(s_spi_settings);
-    ::digitalWrite(cs, LOW);
-    if (tx && rx)      SPI.transfer(tx, rx, n);
-    else if (rx)       { for (size_t i = 0; i < n; i++) rx[i] = SPI.transfer(0x00); }
-    else               { for (size_t i = 0; i < n; i++) SPI.transfer(tx ? tx[i] : 0x00); }
-    ::digitalWrite(cs, HIGH);
-    SPI.endTransaction();
-    return Status::ok;
+    const unsigned i=static_cast<unsigned>(bus);
+    if(i>1 || !s_spi_ready[i] || n==0 || cs==NC) return Status::error;
+    SPIClass& spi=spi_for(bus);
+    spi.beginTransaction(s_spi_settings[i]); ::digitalWrite(cs,LOW);
+    if(tx && rx) spi.transfer(tx,rx,n);
+    else for(size_t k=0;k<n;++k) {
+        const uint8_t v=spi.transfer(tx?tx[k]:0);
+        if(rx) rx[k]=v;
+    }
+    ::digitalWrite(cs,HIGH); spi.endTransaction(); return Status::ok;
 }
 
 Status spi_xfer_async(SpiBus, PinId, const uint8_t*, uint8_t*, size_t) { return Status::unsupported; }
 bool   spi_busy      (SpiBus) { return false; }
 
 // ---------------------------------------------------------------------------
-// I2C -- BMP581 on I2C1 (PB6/PB7)
+// I2C1 PB6/PB7: BMP581. I2C2 PB10/PB11: BMM350.
 // ---------------------------------------------------------------------------
-Status i2c_config(I2cBus bus, uint32_t hz)
+static TwoWire s_mag_wire(board::mag_sda,board::mag_scl);
+static TwoWire& wire_for(I2cBus bus) { return bus==I2cBus::baro ? Wire : s_mag_wire; }
+Status i2c_config(I2cBus bus,uint32_t hz)
 {
-    if (bus != I2cBus::baro) return Status::unsupported;
-    Wire.setSCL(PB6);
-    Wire.setSDA(PB7);
-    Wire.setClock(hz);
-    Wire.begin();
-    return Status::ok;
+    if(!board_configured()) return Status::unsupported;
+    TwoWire& wire=wire_for(bus);
+    if(bus==I2cBus::baro) { wire.setSCL(board::baro_scl); wire.setSDA(board::baro_sda); }
+    wire.begin(); wire.setClock(hz); return Status::ok;
 }
-
-Status i2c_write_read(I2cBus bus, uint8_t addr7,
-                      const uint8_t* wr, size_t wn,
-                      uint8_t* rd, size_t rn)
+Status i2c_write_read(I2cBus bus,uint8_t addr,const uint8_t* wr,size_t wn,uint8_t* rd,size_t rn)
 {
-    if (bus != I2cBus::baro) return Status::unsupported;
-
-    if (wn > 0) {
-        Wire.beginTransmission(addr7);
-        Wire.write(wr, wn);
-        // repeated start if a read follows, STOP otherwise
-        if (Wire.endTransmission(rn == 0) != 0) return Status::error;
+    if(!board_configured() || rn>255) return Status::unsupported;
+    TwoWire& wire=wire_for(bus);
+    if(wn) {
+        wire.beginTransmission(addr);
+        if(wire.write(wr,wn)!=wn || wire.endTransmission(rn==0)!=0) return Status::error;
     }
-    if (rn > 0) {
-        if (Wire.requestFrom((uint8_t)addr7, (uint8_t)rn) != rn) return Status::error;
-        for (size_t i = 0; i < rn; i++) rd[i] = (uint8_t)Wire.read();
+    if(rn) {
+        if(wire.requestFrom(addr,static_cast<uint8_t>(rn))!=rn) return Status::error;
+        for(size_t i=0;i<rn;++i) rd[i]=uint8_t(wire.read());
     }
     return Status::ok;
 }
 
 // ---------------------------------------------------------------------------
 // UART
-//   GPS  -- USART1, crossed wiring: MCU TX = PA9, MCU RX = PA10.
-//   CRSF -- USART3: MCU RX = PB11 (<- RX TX), MCU TX = PB10 (-> RX RX). Pins
-//           are bound by the s_crsf constructor. TODO: DMA circular RX + IDLE.
+//   GPS: USART2, TX PA2 / RX PA3. CRSF: UART4, TX PA0 / RX PA1.
+//   Framework interrupt-driven RX ring; no DMA implementation yet.
 // ---------------------------------------------------------------------------
-static HardwareSerial s_crsf(PB11, PB10);   // (rx, tx) -> selects USART3
+static HardwareSerial s_crsf(board::rc_rx, board::rc_tx);
+static HardwareSerial s_gps(board::gps_rx, board::gps_tx);
 
 static HardwareSerial* port_for(Uart u)
 {
     switch (u) {
-        case Uart::gps:  return &Serial1;
+        case Uart::gps:  return &s_gps;
         case Uart::crsf: return &s_crsf;
     }
     return nullptr;
@@ -156,10 +159,10 @@ static HardwareSerial* port_for(Uart u)
 
 Status uart_config(Uart u, uint32_t baud)
 {
+    if (!board_configured()) return Status::unsupported;
     HardwareSerial* p = port_for(u);
     if (!p) return Status::unsupported;
     p->end();
-    if (u == Uart::gps) { p->setTx(PA9); p->setRx(PA10); }  // crsf pins fixed by ctor
     p->begin(baud);
     return Status::ok;
 }
@@ -208,42 +211,47 @@ bool uart_tx_idle(Uart u)
 
 // ---------------------------------------------------------------------------
 // PWM servo / ESC output.
-//   out_1_4 -> TIM4 CH1..4  = PD12 PD13 PD14 PD15
-//   out_5_8 -> TIM1 CH1..4  = PE9  PE11 PE13 PE14
+//   Ailerons: TIM3, PC7/PC6. Tail: TIM4, PD15/PD14/PD13/PD12.
+//   Motors: TIM1, PA8/PA9. Physical SERVO7 (PD11) is intentionally unused.
 // setPWM() inits each channel (0% duty = no pulse until pwm_write_us). The
 // pulse is then set directly in microseconds. Channels are 0-indexed here,
 // 1-indexed in HardwareTimer.
 // ---------------------------------------------------------------------------
-static const uint32_t kPwmPins14[4] = { PD12, PD13, PD14, PD15 };
-static const uint32_t kPwmPins58[4] = { PE9,  PE11, PE13, PE14 };
-
 static HardwareTimer* pwm_timer(PwmGroup g)
 {
-    if (g == PwmGroup::out_1_4) { static HardwareTimer t(TIM4); return &t; }
-    else                        { static HardwareTimer t(TIM1); return &t; }
+    static HardwareTimer ailerons(TIM3),tail(TIM4),motors(TIM1);
+    switch(g) {
+        case PwmGroup::ailerons: return &ailerons;
+        case PwmGroup::tail: return &tail;
+        case PwmGroup::motors: return &motors;
+    }
+    return nullptr;
 }
-
-Status pwm_config(PwmGroup g, uint32_t frame_hz)
-{
-    HardwareTimer* t = pwm_timer(g);
-    const uint32_t* pins = (g == PwmGroup::out_1_4) ? kPwmPins14 : kPwmPins58;
-    for (uint32_t ch = 0; ch < 4; ch++)
-        t->setPWM(ch + 1, pins[ch], frame_hz, 0);   // 0% duty -> no pulse yet
+static const uint32_t* pwm_pins(PwmGroup g) {
+    return g==PwmGroup::ailerons?board::pwm_ailerons:
+           g==PwmGroup::tail?board::pwm_tail:board::pwm_motors;
+}
+static const uint8_t* pwm_channels(PwmGroup g) {
+    return g==PwmGroup::ailerons?board::channels_ailerons:
+           g==PwmGroup::tail?board::channels_tail:board::channels_motors;
+}
+Status pwm_config(PwmGroup g,uint32_t hz) {
+    auto* timer=pwm_timer(g);
+    if(!board_configured() || !timer || hz<40 || hz>400) return Status::error;
+    const unsigned count=g==PwmGroup::tail?4:2;
+    for(unsigned i=0;i<count;++i) timer->setPWM(pwm_channels(g)[i],pwm_pins(g)[i],hz,0);
     return Status::ok;
 }
-
-Status pwm_write_us(PwmGroup g, uint8_t channel, uint16_t pulse_us)
-{
-    if (channel > 3) return Status::error;
-    pwm_timer(g)->setCaptureCompare(channel + 1, pulse_us, MICROSEC_COMPARE_FORMAT);
+Status pwm_write_us(PwmGroup g,uint8_t ch,uint16_t pulse_us) {
+    auto* timer=pwm_timer(g);
+    if(!board_configured() || !timer || ch>=(g==PwmGroup::tail?4:2) || pulse_us<800 || pulse_us>2200) return Status::error;
+    timer->setCaptureCompare(pwm_channels(g)[ch],pulse_us,MICROSEC_COMPARE_FORMAT);
     return Status::ok;
 }
 
 // ---------------------------------------------------------------------------
-// SD block device -- not implemented. The bench CSV logger still drives the
-// vendored STM32SD / FatFs stack directly (README known issue #2: those trees
-// are patched and must not be regenerated). This binds when binary logging
-// replaces the CSV logger.
+// Generic block HAL not implemented. The optional ground-only binary logger
+// uses the patched STM32SD/FatFs stack directly.
 // ---------------------------------------------------------------------------
 Status   blk_init()                                     { return Status::unsupported; }
 uint32_t blk_sector_count()                             { return 0; }

@@ -391,7 +391,7 @@ void File::close()
   */
 void File::flush()
 {
-  f_sync(_fil);
+  _res = _fil ? f_sync(_fil) : FR_INVALID_OBJECT;
 }
 
 /**
@@ -472,8 +472,8 @@ size_t File::write(uint8_t data)
   */
 size_t File::write(const char *buf, size_t size)
 {
-  size_t byteswritten;
-  f_write(_fil, (const void *)buf, size, (UINT *)&byteswritten);
+  UINT byteswritten = 0;
+  _res = _fil ? f_write(_fil, (const void *)buf, size, &byteswritten) : FR_INVALID_OBJECT;
   return byteswritten;
 }
 

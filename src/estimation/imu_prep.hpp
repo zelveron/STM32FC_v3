@@ -6,13 +6,13 @@
 //      disturbed during the window);
 //   2. first-order low-pass on gyro and accel.
 //
-// The LPF here is a placeholder anti-alias filter. At the current ~100 Hz
-// sample rate a low cutoff is marginal; when the BMI323 moves to FIFO + 1 kHz
-// this becomes a proper biquad / notch, tuned from the vibration test.
+// Software filtering follows the BMI270 sensor-side filtering. Its cutoff
+// and any future notch filters require measured airframe vibration data.
 //
 // Portable.
 //
 #include <cstdint>
+#include "biquad.hpp"
 
 namespace estimation {
 
@@ -30,11 +30,15 @@ public:
                    float cal_seconds = 4.0f);
 
     ImuSample process(float gx_dps, float gy_dps, float gz_dps,
-                      float ax_g, float ay_g, float az_g, float dt_s);
+                      float ax_g, float ay_g, float az_g, float dt_s,
+                      bool allow_calibration = true);
 
     bool  bias_ready() const { return _bias_ready; }
     void  gyro_bias(float& bx, float& by, float& bz) const { bx=_bx; by=_by; bz=_bz; }
     void  restart_bias_cal();
+    bool configure_notch(float sample_hz,float center_hz,float q) {
+        bool ok=true; for(auto& n:_notch) ok=n.configure(sample_hz,center_hz,q)&&ok; return ok;
+    }
 
 private:
     // --- gyro bias cal ---
@@ -49,9 +53,11 @@ private:
 
     // --- LPF state (first order): y += a * (x - y) ---
     float _ga = 1.0f, _aa = 1.0f;   // alpha for gyro / accel
+    float _gyro_fc = 30, _acc_fc = 15;
     float _gf[3] = { 0, 0, 0 };
     float _af[3] = { 0, 0, 0 };
     bool  _lpf_primed = false;
+    Notch _notch[3];
 };
 
 } // namespace estimation

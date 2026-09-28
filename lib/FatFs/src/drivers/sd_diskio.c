@@ -125,9 +125,11 @@ static DRESULT SD_read(BYTE lun, BYTE *buff, LBA_t sector, UINT count)
                        (uint32_t) (sector),
                        count, SD_TIMEOUT) == MSD_OK)
   {
-    /* Wait until the card state is ready */
+    /* Bound card programming time as well as the preceding transfer. */
+    uint32_t ready_start = HAL_GetTick();
     while(BSP_SD_GetCardState()!= MSD_OK)
     {
+      if ((uint32_t)(HAL_GetTick() - ready_start) >= SD_TIMEOUT) return RES_ERROR;
     }
     res = RES_OK;
   }
@@ -151,9 +153,10 @@ static DRESULT SD_write(BYTE lun, const BYTE *buff, LBA_t sector, UINT count)
                         (uint32_t)(sector),
                         count, SD_TIMEOUT) == MSD_OK)
   {
-    /* Wait until the card state is ready */
+    uint32_t ready_start = HAL_GetTick();
     while(BSP_SD_GetCardState() != MSD_OK)
     {
+      if ((uint32_t)(HAL_GetTick() - ready_start) >= SD_TIMEOUT) return RES_ERROR;
     }
     res = RES_OK;
   }

@@ -1,3 +1,5 @@
+> Historical decision log. For current v2.2 behavior, use README.md and the 2026-09-28 entry below; earlier hardware and flight-safety claims are superseded.
+
 # Design decisions
 
 Append-only. One paragraph per settled design question. Newest at the bottom.
@@ -462,3 +464,55 @@ git remotes (origin + claude both point at it now; main tracks origin/main).
 The local working dir is still ~/Desktop/STM32FC_Claude. The old
 github.com/zelveron/STM32FC is the prior-generation reference codebase, not
 this project. README rewritten to current state in the same commit.
+
+**2026-09-28 — v2.2 board migration and review remediation.**
+The user selected the manufactured F407VG board with two BMI270s, BMP581,
+BMM350 and SAM-M10Q. J2/UART4 is assigned to ER8; Y2 is confirmed 8 MHz.
+Earlier hardware/pin/rate claims above are historical and superseded by
+HARDWARE_V2.md. Both IMUs use filtered 400 Hz FIFOs and independent startup
+calibration. One feeds the quaternion estimator, with calibrated backup
+selection and latched ambiguity on persistent disagreement. No magnetic or
+GNSS navigation fusion is claimed yet.
+
+The user selected throttle-cut/healthy-level RC failsafe, with automatic
+restoration at current throttle after stable reception if previously armed
+and CH5 remains high. CH5 is arm; CH7 selects MANUAL/ASSIST/TKOFF. TKOFF remains
+roll assistance with pilot pitch/yaw/throttle. Mode transitions use bounded
+surface slew rather than integrator preload. GPS ground speed is no longer
+used as airspeed for turn compensation.
+
+SD writes are disabled by default and forbidden after first arming; earlier
+claims that scheduler priority made blocking SD safe do not apply. A control
+deadline latch and watchdog were added, but physical timing is unverified.
+The default build inhibits motors because electrical rework and hardware
+acceptance remain outstanding. See CHANGE_REVIEW.md, VALIDATION.md and
+FEATURES.md for implementation, evidence and limitations. No firmware was
+flashed and no flight-readiness claim is made.
+
+
+**2026-09-28 - asynchronous recorder, control and telemetry improvements.**
+This entry supersedes the interim ground-only SD policy immediately above.
+The user authorized the proposed improvements. Runtime logging now writes
+session/sequence/CRC sectors through a bounded command/SDIO-DMA state machine
+to a FAT32 extent allocated and closed before the scheduler starts. Both IMUs
+have raw/filtered 400 Hz diagnostic records; controller diagnostics are 100 Hz.
+No filesystem operations or HAL command polling waits run in the flight logger.
+Hardware/card timing and power-loss qualification remain pending.
+
+ASSIST now transforms attitude-rate demands into body rates, uses measured
+turn kinematics without substituting GPS for airspeed, and combines direct
+pilot rudder with bounded transient yaw damping. Commands have acceleration
+limits, smooth mode-entry blending, configurable slew and downstream anti-windup.
+Integration eligibility clears on explicit disarm/corroborated landing and
+persists through glides/failsafe. TKOFF remains roll assistance only.
+
+Gravity innovation/rate rejection and residual-bias learning are more selective.
+Measured six-face calibration can be fitted offline and configured per IMU;
+the optional notch remains disabled until vibration spectra justify it.
+The telemetry scheduler retains all groups, with per-type controls, a byte
+budget, prioritized mode changes, fair scheduling and new-fix GPS updates.
+TELEMETRY.md inventories both radio directions and receiver-generated statistics.
+
+All three ARM profiles build; 274 C/C++ and 17 Python checks pass. These are
+implementation/model results, not evidence of an actual flight or airframe tune.
+No board was flashed; motor inhibition remains the default development gate.

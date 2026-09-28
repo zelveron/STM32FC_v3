@@ -9,9 +9,8 @@
 // force vector. When the accel is not trusted the estimate coasts on the
 // (bias-corrected) gyro.
 //
-// Yaw is still unreferenced -- no magnetometer. With the online bias estimate
-// its drift is small; for fixed-wing, GPS ground course covers heading once
-// moving (CLAUDE.md).
+// Yaw is unreferenced and can drift. GNSS course is reported separately; it
+// is not body heading and is not fused here. See docs/SENSOR_FUSION.md.
 //
 // Frame: body FRD, world NED. +roll = right wing down, +pitch = nose up,
 // +yaw = clockwise from above. State is radians.
@@ -24,8 +23,14 @@ namespace ahrs {
 
 // Re-seed roll/pitch from the next sample's accel; zero yaw; clear bias.
 void reset();
+bool valid();
+// Preserve attitude when changing to an independently calibrated gyro.
+void clear_residual_bias();
 
-// accel in g, gyro in deg/s, dt in seconds. (IMU is expected pre-conditioned:
+// accel is NEGATIVE body-FRD specific force, in g (+Z when level at rest).
+// Gyro is body-FRD angular velocity in deg/s. dt in seconds. Sensor mounting
+// rotation and the accel sign conversion belong at the driver boundary.
+// (IMU is expected pre-conditioned:
 // bias-calibrated + low-passed -- see estimation/imu_prep.)
 void update(float ax_g, float ay_g, float az_g,
             float gx_dps, float gy_dps, float gz_dps, float dt_s);

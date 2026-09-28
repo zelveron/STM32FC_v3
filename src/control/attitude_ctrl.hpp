@@ -1,18 +1,7 @@
 #pragma once
-//
-// attitude_ctrl.hpp -- outer loop: target roll/pitch angle -> desired body
-// rate for the rate loop.
-//
-// A P controller on the angle error (rate = gain * error), rate-limited. Plus
-// a turn-compensation feedforward: banking loses vertical lift, so a steady
-// pitch-up rate demand proportional to tan(bank)*sin(bank)*g/V is added while
-// banked, or the nose drops in every turn (CLAUDE.md control notes).
-//
-// Yaw is not an angle loop -- the caller feeds the yaw stick to the rate loop
-// directly (optionally with a sideslip/coordination term later).
-//
-// Portable.
-//
+// Fixed-wing outer attitude loop. Wrap roll error and transform Euler-rate
+// requests to body rates; retain turn pitch coupling. Optional coordinated
+// heading reference requires actual validated airspeed, never GPS speed.
 namespace control {
 
 struct AttitudeCtrlConfig {
@@ -33,6 +22,12 @@ public:
                 float meas_roll, float meas_pitch, float airspeed_mps,
                 float& des_p_dps, float& des_q_dps) const;
 
+    // Euler angle rates must be transformed to body rates in a banked turn.
+    // With no measured airspeed, measured heading rate maintains pitch
+    // kinematics. A washed-out yaw damper in ASSIST allows sustained turns.
+    void body_rates(float target_roll,float target_pitch,float roll,float pitch,
+                    float heading_rate_dps,float& p,float& q,float& r) const;
+    float coordinated_heading_rate(float roll,float pitch,float airspeed) const;
 private:
     AttitudeCtrlConfig _c;
 };

@@ -23,7 +23,7 @@ void Pid::configure(const PidGains& g, float sample_hz)
 
 void Pid::reset()
 {
-    _i = 0.0f;
+    _i = _i_before = 0.0f;
     _prev_meas = 0.0f;
     _d_filt = 0.0f;
     _primed = false;
@@ -32,7 +32,10 @@ void Pid::reset()
 
 float Pid::update(float setpoint, float measurement, float dt_s)
 {
-    if (dt_s <= 0.0f) dt_s = 1e-3f;
+    if (!std::isfinite(dt_s) || dt_s <= 0 || dt_s > 0.1f ||
+        !std::isfinite(setpoint) || !std::isfinite(measurement)) { reset(); return 0; }
+    _d_alpha = lpf_alpha(_g.d_lpf_hz,dt_s);
+    _i_before = _i;
     const float err = setpoint - measurement;
 
     // --- D on measurement (filtered) ---
@@ -62,6 +65,12 @@ float Pid::update(float setpoint, float measurement, float dt_s)
     return clampf(out, _g.out_min, _g.out_max);
 }
 
+void Pid::track_applied(float requested,float applied)
+{
+    if(!std::isfinite(requested)||!std::isfinite(applied)) { _i=0; return; }
+    if((requested-applied)*(_i-_i_before)>0) _i=_i_before;
+}
+
 void Pid::preset_integrator(float setpoint, float measurement, float desired_out)
 {
     _primed = true;
@@ -71,7 +80,7 @@ void Pid::preset_integrator(float setpoint, float measurement, float desired_out
     _p = _g.kp * (setpoint - measurement);
     const float ff = _g.kff * setpoint;
     float i = desired_out - ff - _p;             // d assumed ~0 at entry
-    if (_g.i_max > 0.0f) i = clampf(i, -_g.i_max, _g.i_max);
+    i = _g.i_max > 0.0f ? clampf(i, -_g.i_max, _g.i_max) : 0.0f;
     _i = i;
 }
 

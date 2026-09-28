@@ -82,7 +82,7 @@ void Aircraft::reset(double airspeed_mps, double alt_m)
     _trim_thr = D / (kTmax > 0 ? kTmax : 1.0);
     if (_trim_thr < 0) _trim_thr = 0; else if (_trim_thr > 1) _trim_thr = 1;
 
-    _s = State{};
+    _s = State{}; _wind={};
     _s.pos_ned    = { 0, 0, -alt_m };
     _s.vel_ned    = { V, 0, 0 };                 // horizontal, north
     _s.q          = { std::cos(alpha / 2), 0, std::sin(alpha / 2), 0 };  // pitched up alpha
@@ -92,9 +92,13 @@ void Aircraft::reset(double airspeed_mps, double alt_m)
 
 double Aircraft::airspeed_mps() const
 {
-    return std::sqrt(_s.vel_ned.x*_s.vel_ned.x +
-                     _s.vel_ned.y*_s.vel_ned.y +
-                     _s.vel_ned.z*_s.vel_ned.z);
+    const auto& v=_s.vel_ned;
+    return std::sqrt((v.x-_wind.x)*(v.x-_wind.x)+(v.y-_wind.y)*(v.y-_wind.y)+(v.z-_wind.z)*(v.z-_wind.z));
+}
+
+void Aircraft::set_wind(Vec3 wind,bool preserve) {
+    if(preserve) { _s.vel_ned.x+=wind.x-_wind.x; _s.vel_ned.y+=wind.y-_wind.y; _s.vel_ned.z+=wind.z-_wind.z; }
+    _wind=wind;
 }
 
 void Aircraft::euler(double& roll, double& pitch, double& yaw) const
@@ -109,7 +113,7 @@ void Aircraft::euler(double& roll, double& pitch, double& yaw) const
 
 void Aircraft::derivatives(const State& s, const Controls& u, State& d) const
 {
-    const Vec3 vb = world_to_body(s.q, s.vel_ned);         // body velocity
+    const Vec3 vb = world_to_body(s.q, {s.vel_ned.x-_wind.x,s.vel_ned.y-_wind.y,s.vel_ned.z-_wind.z});         // body velocity
     const double V = std::sqrt(vb.x*vb.x + vb.y*vb.y + vb.z*vb.z);
     const double Vs = V < 1.0 ? 1.0 : V;                   // guard divides
     const double alpha = std::atan2(vb.z, vb.x);

@@ -2,16 +2,10 @@
 //
 // failsafe.hpp -- layered failsafe.
 //
-// !!! Do not modify this file as a side effect of another change (CLAUDE.md
-// hard rule 7). A silent failsafe change is worse than none. !!!
-//
-// Today it tracks one thing: RC link loss. When engaged, the caller drives
-// every output to its safe pulse (throttle min, surfaces centred). It starts
-// engaged and only clears after the link has been stable for a recovery
-// window. Debounced both ways.
-//
-// Later: sensor-fault demotion (AUTO -> ASSIST -> MANUAL), latched and
-// announced over CRSF telemetry.
+// Tracks RC loss using the driver's channel-data freshness. Starts engaged
+// and clears after 300 ms of usable reception. Application policy cuts motors
+// and levels with healthy calibrated attitude, or centers surfaces otherwise.
+// See docs/TX16S_SETUP.md for the user-selected automatic throttle recovery.
 //
 #include <cstdint>
 

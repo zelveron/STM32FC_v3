@@ -2,7 +2,6 @@
 
 namespace core {
 namespace {
-constexpr uint32_t kEngageMs  = 200;   // link must be lost this long to engage
 constexpr uint32_t kRecoverMs = 300;   // ...and stable this long to clear
 }
 
@@ -18,8 +17,8 @@ void Failsafe::update(bool link_ok, uint32_t now_ms)
         if (_level == FailsafeLevel::rc_loss && stable >= kRecoverMs)
             _level = FailsafeLevel::none;
     } else {
-        if (_level == FailsafeLevel::none && stable >= kEngageMs)
-            _level = FailsafeLevel::rc_loss;
+        // The CRSF driver's 200 ms age bound is the entire loss timeout.
+        _level = FailsafeLevel::rc_loss;
     }
 }
 

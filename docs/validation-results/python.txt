@@ -1,0 +1,7 @@
+Spectrum exported; Nyquist is 200 Hz. Sensor filtering precedes these raw values.
+..........
+----------------------------------------------------------------------
+Ran 10 tests in 0.194s
+
+OK
+7 GUI parser/freshness checks passed (headless; visual layout not tested)

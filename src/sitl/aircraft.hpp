@@ -46,6 +46,7 @@ public:
     // Truth Euler angles (rad), for CSV / comparison with the AHRS.
     void euler(double& roll, double& pitch, double& yaw) const;
     double airspeed_mps() const;
+    void set_wind(Vec3 wind,bool preserve_airspeed=false);
 
     // Trim the pilot / autopilot commands sit on top of.
     double trim_elevator() const { return _trim_de; }   // stick-equivalent [-1,+1]
@@ -53,6 +54,7 @@ public:
 
 private:
     State  _s;
+    Vec3 _wind;
     double _trim_de  = 0.0;
     double _trim_thr = 0.5;
     void   derivatives(const State& s, const Controls& u, State& d) const;

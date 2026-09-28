@@ -2,14 +2,14 @@
 //
 // crsf.hpp -- CRSF (Crossfire / ExpressLRS) receiver link parser.
 //
-// USART3 @ 420000 8N1, not inverted. Frame: [0xC8][len][type][payload][crc8],
+// UART4/J2 @ 420000 8N1, not inverted. Frame: [0xC8][len][type][payload][crc8],
 // crc8 = CRC-8/DVB-S2 (poly 0xD5) over type+payload. Decodes RC_CHANNELS_PACKED
 // (0x16) and LINK_STATISTICS (0x14); notes other valid frame types.
 //
 // Portable: hal only. poll() is non-blocking (drains the UART, feeds a byte
 // state machine, resyncs on a bad length or CRC).
 //
-// TODO: telemetry TX (battery / GPS / attitude uplink); DMA circular RX.
+// Telemetry is scheduled by core/telemetry_schedule.hpp; DMA RX is not used.
 //
 #include <cstddef>
 #include <cstdint>
@@ -48,7 +48,7 @@ const LinkStats& link();
 uint8_t          last_frame_type();
 
 // --- health ---
-bool     receiving();       // a valid frame within the last 500 ms
+bool     receiving();       // a valid full RC-channel frame within the last 200 ms
 uint32_t frames_ok();
 uint32_t crc_errors();
 uint32_t resyncs();

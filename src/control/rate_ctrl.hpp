@@ -28,6 +28,10 @@ public:
 
     // Freeze/thaw all three axis integrators (see Pid::set_integrator_enabled).
     void set_integrator_enabled(bool en);
+    void track_applied(float rr,float rp,float ry,float ar,float ap,float ay) {
+        _roll.track_applied(rr,ar); _pitch.track_applied(rp,ap); _yaw.track_applied(ry,ay);
+    }
+    void clear_integrators() { _roll.clear_integrator(); _pitch.clear_integrator(); _yaw.clear_integrator(); }
 
     // rates in deg/s; outputs in [-1,+1].
     void update(float des_p, float des_q, float des_r,

@@ -1,4 +1,5 @@
 #include "srv_channel.hpp"
+#include <cmath>
 
 namespace control {
 namespace {
@@ -9,6 +10,7 @@ uint16_t clampu(int32_t v, uint16_t lo, uint16_t hi)
 
 uint16_t SrvChannel::from_norm(float cmd) const
 {
+    if (!std::isfinite(cmd)) return center_us;
     if (reversed) cmd = -cmd;
     cmd = clampf(cmd, -1.0f, 1.0f);
     const float half = (cmd >= 0.0f) ? (float)((int32_t)max_us - (int32_t)center_us)
@@ -20,6 +22,7 @@ uint16_t SrvChannel::from_norm(float cmd) const
 
 uint16_t SrvChannel::from_unipolar(float thr) const
 {
+    if (!std::isfinite(thr)) return min_us;
     if (reversed) thr = 1.0f - thr;
     thr = clampf(thr, 0.0f, 1.0f);
     const int32_t us = (int32_t)min_us +

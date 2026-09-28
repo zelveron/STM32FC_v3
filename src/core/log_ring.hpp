@@ -5,8 +5,8 @@
 //
 // Single producer, single consumer, both on the one cooperative thread, so no
 // locking is needed. push() is O(len) memcpy and never blocks: if the record
-// does not fit it is dropped whole and counted. The flush task pulls
-// 512-byte-aligned chunks.
+// does not fit it is dropped whole and counted. The storage task copies up to
+// 492 stream bytes into a protected 512-byte sector envelope.
 //
 // Portable.
 //
@@ -17,10 +17,9 @@ namespace core {
 
 class LogRing {
 public:
-    // ~3.5 s of log at the current frame rate. Must stay a power of two. Sized
-    // so a multi-hundred-ms SD stall (worst-case card hiccup) never drops a
-    // frame, while leaving RAM headroom for later work (F407 has 128 KB).
-    static constexpr size_t kSize = 16384;
+    // About 0.8 s at the default dual-IMU + control + state log rates.
+    // Longer stalls drop new complete records; control never waits for room.
+    static constexpr size_t kSize = 32768;
 
     // Append len bytes atomically. Returns false and bumps drops() if the ring
     // cannot hold the whole record right now.

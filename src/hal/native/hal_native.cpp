@@ -9,8 +9,10 @@
 #include <thread>
 
 const hal::PinId hal::pins::imu_cs = 0;
+const hal::PinId hal::pins::imu2_cs = 1;
 
 namespace hal {
+bool board_configured() { return false; }
 namespace {
 
 std::chrono::steady_clock::time_point s_t0;

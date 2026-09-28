@@ -12,23 +12,24 @@ void AttitudeController::update(float tgt_roll, float tgt_pitch,
                                 float meas_roll, float meas_pitch, float airspeed_mps,
                                 float& des_p_dps, float& des_q_dps) const
 {
-    des_p_dps = clampf(_c.roll_p_dps_per_rad  * (tgt_roll  - meas_roll),
-                       -_c.max_roll_rate_dps,  _c.max_roll_rate_dps);
-    float q  = clampf(_c.pitch_p_dps_per_rad * (tgt_pitch - meas_pitch),
-                       -_c.max_pitch_rate_dps, _c.max_pitch_rate_dps);
-
-    // turn compensation: pitch-up rate FF while banked
-    if (_c.turn_comp_gain > 0.0f && airspeed_mps > 1.0f) {
-        const float phi = clampf(meas_roll, -1.20f, 1.20f);   // |bank| <= ~69 deg
-        // pitch rate the aircraft needs in a coordinated turn:
-        //   psi_dot = g*tan(phi)/V ; pitch_rate = psi_dot*sin(phi)   [rad/s -> dps]
-        const float ff  = _c.turn_comp_gain * kRad2Deg *
-                          std::fabs(std::tan(phi)) * std::fabs(std::sin(phi)) *
-                          (kG / airspeed_mps);
-        q += clampf(ff, 0.0f, _c.turn_comp_max_dps);           // always nose-up
-    }
-
-    des_q_dps = clampf(q, -_c.max_pitch_rate_dps, _c.max_pitch_rate_dps);
+    float unused_r;
+    const float heading=coordinated_heading_rate(meas_roll,meas_pitch,airspeed_mps);
+    body_rates(tgt_roll,tgt_pitch,meas_roll,meas_pitch,heading,des_p_dps,des_q_dps,unused_r);
 }
 
+float AttitudeController::coordinated_heading_rate(float roll,float pitch,float v) const {
+    if(_c.turn_comp_gain<=0||!std::isfinite(v)||v<8) return 0;
+    return clampf(_c.turn_comp_gain*kRad2Deg*kG*std::tan(clampf(roll,-1.05f,1.05f))*
+                  std::cos(pitch)/v,-_c.turn_comp_max_dps,_c.turn_comp_max_dps);
+}
+void AttitudeController::body_rates(float tr,float tp,float roll,float pitch,float hdg,
+                                   float& p,float& q,float& r) const {
+    // Wrap roll error so recovery across +/-pi takes the shortest direction.
+    const float er=std::atan2(std::sin(tr-roll),std::cos(tr-roll));
+    const float phi_dot=clampf(_c.roll_p_dps_per_rad*er,-_c.max_roll_rate_dps,_c.max_roll_rate_dps);
+    const float theta_dot=clampf(_c.pitch_p_dps_per_rad*(tp-pitch),-_c.max_pitch_rate_dps,_c.max_pitch_rate_dps);
+    p=clampf(phi_dot-hdg*std::sin(pitch),-_c.max_roll_rate_dps,_c.max_roll_rate_dps);
+    q=clampf(theta_dot*std::cos(roll)+hdg*std::sin(roll)*std::cos(pitch),-_c.max_pitch_rate_dps,_c.max_pitch_rate_dps);
+    r=-theta_dot*std::sin(roll)+hdg*std::cos(roll)*std::cos(pitch);
+}
 } // namespace control

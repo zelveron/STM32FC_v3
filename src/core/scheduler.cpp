@@ -18,6 +18,7 @@ struct Task {
     uint32_t    min_us;
     uint32_t    max_us;
     uint64_t    sum_us;
+    uint32_t    completed_us;
 };
 
 Task     s_task[kMaxTasks];
@@ -50,6 +51,7 @@ void run_task(Task& t, uint32_t now)
     if (us < t.min_us) t.min_us = us;
     if (us > t.max_us) t.max_us = us;
     t.sum_us += us;
+    t.completed_us = hal::micros();
     if (late || us > t.period_us) t.overruns++;
 
     // next slot; resync if a whole period behind (no catch-up storm)
@@ -108,7 +110,14 @@ void run_once()
         if (t.last_us > kYieldUs) service_critical();
     }
 
-    if (s_wdt_started) hal::watchdog_kick();
+    if (s_wdt_started) {
+        bool progressed=true;
+        for(size_t i=0;i<s_n;++i) if(s_task[i].critical) {
+            const auto& t=s_task[i];
+            if(!t.runs || uint32_t(hal::micros()-t.completed_us)>20000) progressed=false;
+        }
+        if(progressed) hal::watchdog_kick();
+    }
 
     const uint32_t pass_us = cyc_to_us(hal::cycles() - pass_c0);
     if (pass_us > s_worst_pass_us) s_worst_pass_us = pass_us;

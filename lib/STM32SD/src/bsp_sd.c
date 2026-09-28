@@ -106,6 +106,8 @@
 
 /* BSP SD Private Variables */
 static SD_HandleTypeDef uSdHandle;
+// Application owns SDIO after boot-time FAT preallocation.
+SD_HandleTypeDef* BSP_SD_Handle(void) { return &uSdHandle; }
 static uint32_t SD_detect_ll_gpio_pin = LL_GPIO_PIN_ALL;
 static GPIO_TypeDef *SD_detect_gpio_port = GPIOA;
 static uint32_t SD_detect_level = SD_DETECT_LEVEL;

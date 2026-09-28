@@ -17,6 +17,7 @@ Library (used by tools/plot_log.py):
 import argparse
 import struct
 import sys
+from log_container import read_payload, RECORDS, crc16
 
 HDR_FMT    = "<4sBBHfff"
 HDR_SIZE   = struct.calcsize(HDR_FMT)          # 20
@@ -35,12 +36,7 @@ COLS = ",".join(FIELDS)   # back-compat
 
 
 def crc16_ccitt(buf):
-    crc = 0xFFFF
-    for byte in buf:
-        crc ^= byte << 8
-        for _ in range(8):
-            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if (crc & 0x8000) else (crc << 1) & 0xFFFF
-    return crc
+    return crc16(buf)
 
 
 def decode(path):
@@ -52,8 +48,7 @@ def decode(path):
       rows -- list of tuples, each matching FIELDS (physical units).
     Raises ValueError on a bad/incompatible header.
     """
-    with open(path, "rb") as fp:
-        data = fp.read()
+    data, container = read_payload(path)
     if len(data) < HDR_SIZE:
         raise ValueError("file shorter than the 20-byte header")
 
@@ -67,6 +62,13 @@ def decode(path):
     rows, ok, bad_crc, resyncs = [], 0, 0, 0
     i = 0
     while i + FRAME_SIZE <= len(body):
+        record_magic = body[i] | (body[i + 1] << 8)
+        if record_magic in RECORDS and record_magic != MAGIC:
+            size = RECORDS[record_magic]
+            raw = body[i:i+size]
+            if len(raw) == size and struct.unpack_from('<H', raw, size-2)[0] == crc16(raw[:-2]):
+                i += size
+                continue
         if body[i] | (body[i + 1] << 8) != MAGIC:
             i += 1
             resyncs += 1
@@ -98,6 +100,7 @@ def decode(path):
                 acc_scale=accs, gyr_scale=gyrs, ang_scale=angs,
                 n_ok=ok, n_bad_crc=bad_crc, n_resync=resyncs,
                 duration_s=dur, hz=(ok / dur if dur else 0.0))
+    meta.update(container)
     return meta, rows
 
 

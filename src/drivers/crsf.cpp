@@ -38,7 +38,9 @@ uint32_t s_frames_ok = 0;
 uint32_t s_crc_err   = 0;
 uint32_t s_resync    = 0;
 uint32_t s_bytes     = 0;
-uint32_t s_last_ok_ms = 0;
+uint32_t s_last_rc_ms = 0;
+uint32_t s_last_byte_ms = 0;
+bool s_have_rc = false;
 
 // diagnostic ring of the most recent raw bytes
 uint8_t  s_raw[32];
@@ -136,10 +138,14 @@ uint8_t dispatch()
     if (crc_rx != crc_calc) { s_crc_err++; return EV_NONE; }
 
     s_frames_ok++;
-    s_last_ok_ms = hal::millis();
     s_last_type  = type;
 
-    if (type == kTypeRC && pl_len >= 22) { unpack_rc(pl);  return EV_RC; }
+    if (type == kTypeRC && pl_len >= 22) {
+        unpack_rc(pl);
+        s_last_rc_ms = hal::millis();
+        s_have_rc = true;
+        return EV_RC;
+    }
     if (type == kTypeLink && pl_len >= 10) { parse_link(pl); return EV_LINK; }
     return EV_OTHER;
 }
@@ -151,15 +157,30 @@ void begin(uint32_t baud)
     hal::uart_config(kPort, baud);
     s_len = 0;
     s_need = 0;
+    s_have_rc = false;
+    s_last_rc_ms = s_last_byte_ms = 0;
+    s_ch = Channels{};
+    for (auto& us : s_ch.us) us = 1500;
+    s_ch.us[2] = s_ch.us[4] = 1000;
+    s_link = LinkStats{};
+    s_frames_ok = s_crc_err = s_resync = s_bytes = s_tx_frames = 0;
+    s_raw_head = s_raw_fill = s_last_type = 0;
 }
 
 uint8_t poll()
 {
     uint8_t ev = EV_NONE;
+    if (s_len && (uint32_t)(hal::millis() - s_last_byte_ms) > 20) {
+        s_len = s_need = 0;
+        ++s_resync;
+    }
 
     uint8_t in[96];
     size_t  n;
-    while ((n = hal::uart_read(kPort, in, sizeof(in))) > 0) {
+    // Bound scheduler occupancy even if bytes arrive continuously.
+    for (unsigned batch = 0; batch < 4 &&
+         (n = hal::uart_read(kPort, in, sizeof(in))) > 0; ++batch) {
+        s_last_byte_ms = hal::millis();
         s_bytes += n;
         for (size_t i = 0; i < n; i++) {
             const uint8_t c = in[i];
@@ -199,7 +220,7 @@ const Channels&  channels()        { return s_ch; }
 const LinkStats& link()            { return s_link; }
 uint8_t          last_frame_type() { return s_last_type; }
 
-bool     receiving()   { return s_frames_ok && (hal::millis() - s_last_ok_ms) < 500; }
+bool     receiving()   { return s_have_rc && (uint32_t)(hal::millis() - s_last_rc_ms) < 200; }
 uint32_t frames_ok()   { return s_frames_ok; }
 uint32_t crc_errors()  { return s_crc_err; }
 uint32_t resyncs()     { return s_resync; }
@@ -209,6 +230,7 @@ uint32_t bytes_rx()    { return s_bytes; }
 
 bool send_attitude(float pitch_rad, float roll_rad, float yaw_rad)
 {
+    if (!std::isfinite(pitch_rad) || !std::isfinite(roll_rad) || !std::isfinite(yaw_rad)) return false;
     uint8_t p[6];
     be16(&p[0], (uint16_t)clamp_i16(std::lround(pitch_rad * 10000.0f)));
     be16(&p[2], (uint16_t)clamp_i16(std::lround(roll_rad  * 10000.0f)));
@@ -218,6 +240,7 @@ bool send_attitude(float pitch_rad, float roll_rad, float yaw_rad)
 
 bool send_vario(float climb_mps)
 {
+    if (!std::isfinite(climb_mps)) return false;
     uint8_t p[2];
     be16(&p[0], (uint16_t)clamp_i16(std::lround(climb_mps * 100.0f)));   // cm/s
     return emit(kTypeVario, p, sizeof(p));
