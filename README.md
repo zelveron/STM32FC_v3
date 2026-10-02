@@ -4,7 +4,20 @@ Custom flight-controller firmware for RC fixed-wing aircraft, targeting the **ma
 
 **v3 is the software repository generation; v2.2 is the PCB revision.** PlatformIO profiles retain their `v2` names to identify that board. This project continues [STM32FC_v2](https://github.com/zelveron/STM32FC_v2); older board instructions are archived in [docs/history](docs/history/README-v1.md).
 
-> **Development status — 2026-09-28:** builds and host tests pass. This implementation has not been flashed to the manufactured board, physically qualified, or flown. The default build inhibits both motors. Electrical findings in the supplied PCB design require inspection and correction before powered testing. Direct 6S operation exceeds the fitted regulator's recommended input range.
+> **Development status — 2026-10-02:** the assembled BMI323 board has been flashed and readback-verified; software DFU, both IMUs and BMP581 have been checked on the bench. RC, GNSS fix, real-card logging, actuator directions and flight behavior remain unqualified. The default build inhibits both motors. Electrical findings in the supplied PCB design require inspection and correction before powered testing. Direct 6S operation exceeds the fitted regulator's recommended input range.
+
+## Assembled-board update — 2026-10-02
+
+The connected board reports **two BMI323s (chip ID 0x43), not BMI270s**, and the user confirmed that **no magnetometer is assembled**. Use the new default **`v2_bmi323`** profile for this board. It retains motor inhibition, selects the paired 400 Hz BMI323 FIFO driver and disables BMM350 initialization/polling. The earlier `v2` / `v2_motor_test` profiles remain specifically for the planned BMI270/BMM350 assembly and must not be flashed to this board.
+
+USB maintenance now supports `dfu` and the GUI **Enter DFU** button; see [DFU instructions](docs/DFU.md). The GUI includes an **All live parameters** diagnostic table.
+
+The user confirmed that the documented electrical corrections were checked and that motors/servos were safe for bench work. That confirmation is not a set of measured electrical test results. See [assembled-board bring-up](docs/ASSEMBLED_BOARD.md) for the current driver, GUI, test evidence and physical bring-up status. The 2026-09-28 results below describe the earlier BMI270 target; they do not establish physical validation of this assembly.
+
+```text
+pio run -e v2_bmi323
+python tools/gui.py --port COM6 --capture bench-session.txt
+```
 
 ## Contents
 
@@ -193,7 +206,7 @@ python -m pip install pyserial numpy
 python tools/gui.py --port COM7
 ```
 
-Replace `COM7` with the board's actual port. The GUI displays attitude, dual-IMU health, pressure, GNSS, RC and outputs, and expires stale data. USB also reports estimator, telemetry-budget, scheduler and SD diagnostics. Magnetic axes are compensated sensor data, not calibrated aircraft heading. Newline-terminated `RESET_STATS` clears scheduler counters; `REBOOT_BL` requests the bootloader and is rejected after first arming until restart. See the [feature catalog](docs/FEATURES.md) for tags and fault labels.
+Replace `COM7` with the board's actual port. The GUI displays attitude, dual-IMU health, pressure, GNSS, RC and outputs, and expires stale data. USB also reports estimator, telemetry-budget, scheduler and SD diagnostics. Magnetic axes are compensated sensor data, not calibrated aircraft heading. Newline-terminated `RESET_STATS` clears scheduler counters. `dfu` (alias `REBOOT_BL`) enters ROM DFU through a clean reset; the GUI also has an **Enter DFU** button. Disarm/idle and post-flight RC recovery gates apply; see [USB firmware updates](docs/DFU.md). See the [feature catalog](docs/FEATURES.md) for tags and fault labels.
 
 ## Non-blocking SD logging
 
@@ -233,7 +246,8 @@ pio run -e crsf_probe
 
 | Environment | Purpose | Result |
 |---|---|---|
-| `v2` (default) | Sensor, surface, radio and logging development | `.pio/build/v2/firmware.bin`; `FC_FLIGHT_ENABLED=0`, both ESCs at minimum |
+| `v2_bmi323` (default) | Assembled dual BMI323, no magnetometer | Motor-inhibited bench firmware; `.pio/build/v2_bmi323/firmware.bin` |
+| `v2` (BMI270 assembly) | Sensor, surface, radio and logging development | `.pio/build/v2/firmware.bin`; `FC_FLIGHT_ENABLED=0`, both ESCs at minimum |
 | `v2_motor_test` | Explicit motor-enabled qualification | `FC_FLIGHT_ENABLED=1`; select only after electrical/motor-disabled checks |
 | `crsf_probe` | Independent UART4/USB diagnostic | Isolates receiver wiring/protocol issues |
 | `native` | Portable module checks | Host executable |
@@ -245,7 +259,7 @@ After electrical repairs and propeller-off acceptance checks, the separate motor
 pio run -e v2_motor_test
 ```
 
-The flag enables software authorization, not flight readiness. The configured upload protocol is DFU. Building does not flash anything; no board was flashed during this work.
+The flag enables software authorization, not flight readiness. The configured upload protocol is DFU. Building does not flash anything. The assembled BMI323 board was flashed and readback-verified on 2026-10-02; see [bring-up evidence](docs/ASSEMBLED_BOARD.md).
 
 Configuration is compile-time:
 

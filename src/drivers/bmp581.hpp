@@ -18,6 +18,7 @@ struct Sample {
 
 bool begin();
 bool healthy();
+int error();
 
 // Returns true for a new data-ready event, with the fresh reading in `out`.
 bool poll(Sample& out);

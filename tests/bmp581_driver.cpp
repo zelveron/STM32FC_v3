@@ -15,7 +15,13 @@ Status i2c_write_read(I2cBus b,uint8_t addr,const uint8_t* wr,size_t wn,uint8_t*
     if(rn) {
         std::memcpy(rd,regs+wr[0],rn);
         if(wr[0]==BMP5_REG_INT_STATUS)regs[wr[0]]=0; // read clears flags
-    } else for(size_t i=1;i<wn;++i)regs[wr[0]+i-1]=wr[i];
+    } else {
+        for(size_t i=1;i<wn;++i)regs[wr[0]+i-1]=wr[i];
+        if(wr[0]==BMP5_REG_CMD && wn==2 && wr[1]==BMP5_SOFT_RESET_CMD) {
+            regs[0x28]=2; // NVM ready, including a warm sensor left measuring
+            regs[0x37]=0x80; regs[0x15]=0;
+        }
+    }
     return Status::ok;
 }
 }
@@ -29,6 +35,8 @@ int checks=0,fails=0;
 void check(const char* name,bool ok){++checks;fails+=!ok;std::printf("[%s] %s\n",ok?"PASS":"FAIL",name);}
 int main(){
     reset();check("BMP581 initializes on correct I2C address",bmp581::begin());
+    reset();regs[0x28]=0;regs[0x37]=1;
+    check("warm MCU restart resets still-powered BMP581 before NVM check",bmp581::begin());
     check("normal 50 Hz configuration and DRDY source enabled",(regs[0x37]&3)==BMP5_POWERMODE_NORMAL&&((regs[0x37]>>2)&31)==BMP5_ODR_50_HZ&&(regs[0x15]&1));
     bmp581::Sample out{};
     check("no fabricated sample before data ready",!bmp581::poll(out)&&!bmp581::healthy());

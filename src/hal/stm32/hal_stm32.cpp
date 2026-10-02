@@ -276,29 +276,4 @@ ResetCause reset_cause()
     return ResetCause::unknown;
 }
 
-void jump_to_bootloader()
-{
-    // STM32F407 system-memory (ROM DFU) bootloader entry.
-    const uint32_t kSystemMemoryBase = 0x1FFF0000UL;
-
-    __disable_irq();
-    HAL_RCC_DeInit();
-    HAL_DeInit();
-
-    SysTick->CTRL = 0;
-    SysTick->LOAD = 0;
-    SysTick->VAL  = 0;
-
-    __HAL_RCC_SYSCFG_CLK_ENABLE();
-    __HAL_SYSCFG_REMAPMEMORY_SYSTEMFLASH();
-
-    const uint32_t sp = *reinterpret_cast<const uint32_t*>(kSystemMemoryBase);
-    const uint32_t pc = *reinterpret_cast<const uint32_t*>(kSystemMemoryBase + 4);
-
-    __set_MSP(sp);
-    reinterpret_cast<void (*)(void)>(pc)();
-
-    while (true) { }   // not reached
-}
-
 } // namespace hal

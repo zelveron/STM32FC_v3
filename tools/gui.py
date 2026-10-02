@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Live monitor for the STM32F407 BMP581 + dual BMI270 + SAM-M10Q controller.
+Live monitor for the STM32F407 BMP581 + dual IMU + SAM-M10Q controller.
 
 Reads tagged CSV over USB CDC and shows:
-  - dual BMI270 connection status
+  - dual IMU connection status
   - BMP581: pressure / temperature / altitude
-  - dual BMI270: accel (g) and gyro (deg/s)
+  - dual IMU: accel (g) and gyro (deg/s)
   - Attitude: roll / pitch / yaw (complementary filter) + artificial horizon
   - uBlox GNSS: position / altitude / satellites / fix
 
@@ -24,11 +24,18 @@ import threading
 import time
 
 import serial
+import serial.tools.list_ports
 import tkinter as tk
 from tkinter import ttk
+from enter_dfu import request_dfu
 
 
 def detect_port():
+    stm_ports = [p.device for p in serial.tools.list_ports.comports() if p.vid == 0x0483 and p.pid == 0x5740]
+    if len(stm_ports) == 1:
+        return stm_ports[0]
+    if len(stm_ports) > 1:
+        raise SystemExit("Multiple STM32 boards detected; select one with --port COMx")
     for path in glob.glob("/dev/serial/by-id/*"):
         name = os.path.basename(path)
         if any(k in name for k in ("STMicroelectronics", "CDC", "F407", "stm32")):
@@ -40,14 +47,20 @@ def detect_port():
 
 
 class MonitorApp:
-    def __init__(self, root, port):
+    def __init__(self, root, port, capture_path=None):
         self.root = root
         self.port = port
+        self.capture_path = capture_path
+        self.imu_model = "IMU"
         self.q = queue.Queue()
+        self._reader_stop = threading.Event()
+        self._dfu_busy = False
+        self._dfu_mode = False
         self._last_data = time.time()
         self._last_att = self._last_bmp = self._last_gps = 0.0
-        root.title("dual BMI270 + BMP581 + GNSS Monitor")
-        root.geometry("500x800")
+        root.title("dual IMU + BMP581 + GNSS Monitor")
+        root.geometry("920x960")
+        root.minsize(720, 500)
         root.configure(bg="#1e1e1e")
 
         bg = "#1e1e1e"
@@ -56,19 +69,46 @@ class MonitorApp:
         red = "#e74c3c"
 
         style = ttk.Style()
+        style.theme_use("clam")
         style.configure("TLabel", background=bg, foreground=fg, font=("Helvetica", 12))
         style.configure("Header.TLabel", font=("Helvetica", 14, "bold"))
         style.configure("Value.TLabel", font=("Helvetica", 16, "bold"), foreground="#ffffff")
         style.configure("TFrame", background=bg)
+        style.configure("TLabelframe", background=bg, foreground=fg)
+        style.configure("TLabelframe.Label", background=bg, foreground=fg)
+
+        # Keep every panel reachable on laptop screens and at Windows DPI scaling.
+        shell = ttk.Frame(root)
+        shell.pack(fill="both", expand=True)
+        canvas = tk.Canvas(shell, bg=bg, highlightthickness=0)
+        scroll = ttk.Scrollbar(shell, orient="vertical", command=canvas.yview)
+        scroll.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        canvas.configure(yscrollcommand=scroll.set)
+        body = ttk.Frame(canvas)
+        body_id = canvas.create_window((0, 0), window=body, anchor="nw")
+        body.bind("<Configure>", lambda event: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(body_id, width=event.width))
+        root.bind_all("<MouseWheel>", lambda event: canvas.yview_scroll(-int(event.delta / 120), "units"))
+        root = body
 
         self.amber = "#fbbf24"
         self.blue = "#3b82f6"
 
         # --- BMI status header ---
-        self.status_var = tk.StringVar(value="dual BMI270: waiting...")
+        self.status_var = tk.StringVar(value="dual IMU: waiting...")
         status_lbl = tk.Label(root, textvariable=self.status_var, font=("Helvetica", 14, "bold"),
                               bg=bg, fg=red)
         status_lbl.pack(pady=(12, 8))
+
+        maintenance = ttk.Frame(root)
+        maintenance.pack(fill="x", padx=16, pady=4)
+        self.dfu_button = ttk.Button(maintenance, text="Enter DFU", command=self._enter_dfu)
+        self.dfu_button.pack(side="left")
+        self.resume_button = ttk.Button(maintenance, text="Reconnect", command=self._resume_reader)
+        self.resume_button.pack(side="left", padx=8)
+        self.maintenance_var = tk.StringVar(value="DFU: ground use only; disarm CH5 and lower throttle.")
+        ttk.Label(root, textvariable=self.maintenance_var, wraplength=850).pack(padx=16, pady=4)
 
         # --- Flight control section (mode manager / arming / failsafe) ---
         fc_frame = ttk.LabelFrame(root, text="Flight control")
@@ -93,6 +133,12 @@ class MonitorApp:
         self._row(fc_frame, "Assist lockout", self.lockout_var)
         self._row(fc_frame, "Stab integrators", self.integ_var)
         self._row(fc_frame, "Gyro cal", self.cal_var)
+        self.imu_diag_var = tk.StringVar(value="--")
+        self.bmp_health_var = tk.StringVar(value="--")
+        self.sd_var = tk.StringVar(value="--")
+        self._row(fc_frame, "IMU diagnostics", self.imu_diag_var)
+        self._row(fc_frame, "Barometer health", self.bmp_health_var)
+        self._row(fc_frame, "SD / USB", self.sd_var)
 
         # --- RC in / servo out ---
         io_frame = ttk.LabelFrame(root, text="RC in  ·  servo out (µs)")
@@ -115,7 +161,7 @@ class MonitorApp:
         self._row(bmp_frame, "Altitude", self.alt_var)
 
         # --- BMI section ---
-        bmi_frame = ttk.LabelFrame(root, text="dual BMI270 (IMU)")
+        bmi_frame = ttk.LabelFrame(root, text="dual IMU (IMU)")
         bmi_frame.pack(fill="x", padx=16, pady=6)
 
         self.acc_var = tk.StringVar(value="--, --, -- g")
@@ -143,7 +189,7 @@ class MonitorApp:
         self._row(gps_frame, "Speed", self.gps_speed_var)
 
         # --- Attitude section ---
-        att_frame = ttk.LabelFrame(root, text="Attitude (complementary filter)")
+        att_frame = ttk.LabelFrame(root, text="Attitude (quaternion fusion; yaw is relative)")
         att_frame.pack(fill="x", padx=16, pady=6)
 
         self.roll_var = tk.StringVar(value="-- °")
@@ -164,9 +210,25 @@ class MonitorApp:
         self.horizon.pack(pady=6)
         self._draw_horizon()
 
+        diagnostics = ttk.LabelFrame(root, text="All live parameters — latest message per tag / task")
+        diagnostics.pack(fill="both", padx=16, pady=8)
+        self.diag_tree = ttk.Treeview(diagnostics, columns=("tag", "value"), show="headings", height=16)
+        self.diag_tree.heading("tag", text="Message / task")
+        self.diag_tree.heading("value", text="Latest values (raw tagged CSV)")
+        self.diag_tree.column("tag", width=170, stretch=False)
+        self.diag_tree.column("value", width=1050, stretch=False)
+        diag_x = ttk.Scrollbar(diagnostics, orient="horizontal", command=self.diag_tree.xview)
+        diag_y = ttk.Scrollbar(diagnostics, orient="vertical", command=self.diag_tree.yview)
+        self.diag_tree.configure(xscrollcommand=diag_x.set, yscrollcommand=diag_y.set)
+        diag_y.pack(side="right", fill="y")
+        diag_x.pack(side="bottom", fill="x")
+        self.diag_tree.pack(fill="both", expand=True)
+        ttk.Label(diagnostics, text="Includes scheduler, CRSF, estimator and logging diagnostics. Last values may be stale after disconnect.",
+                  wraplength=800).pack(padx=6, pady=4)
+
         # --- footer ---
         self.footer_var = tk.StringVar(value=f"connecting to {port} ...")
-        ttk.Label(root, textvariable=self.footer_var, foreground="#888888").pack(side="bottom", pady=6)
+        ttk.Label(self.root, textvariable=self.footer_var, foreground="#888888").pack(side="bottom", pady=6)
 
         self._connected = False
         self.status_lbl = status_lbl
@@ -175,13 +237,50 @@ class MonitorApp:
 
         self.reader = threading.Thread(target=self._read_loop, args=(port,), daemon=True)
         self.reader.start()
+        self.root.protocol("WM_DELETE_WINDOW", self._close)
         root.after(50, self._poll)
+
+    def _close(self):
+        self._reader_stop.set()
+        self.root.destroy()
+
+    def _enter_dfu(self):
+        if self._dfu_busy or self._dfu_mode:
+            return
+        self._dfu_busy = True
+        self.dfu_button.configure(state="disabled")
+        self.resume_button.configure(state="disabled")
+        self.maintenance_var.set("Releasing serial port, requesting DFU, then verifying 0483:df11...")
+        self._reader_stop.set()
+        threading.Thread(target=self._dfu_worker, daemon=True).start()
+
+    def _dfu_worker(self):
+        # Only this worker opens the command port, after the reader has closed it.
+        self.reader.join(timeout=3)
+        if self.reader.is_alive():
+            self.q.put(("dfu_error", "Serial reader did not stop; no DFU command sent."))
+            return
+        try:
+            result = request_dfu(self.port)
+            self.q.put(("dfu_ok", result))
+        except Exception as exc:
+            self.q.put(("dfu_error", str(exc)))
+
+    def _resume_reader(self):
+        if self._dfu_busy or self.reader.is_alive():
+            return
+        self._reader_stop.clear()
+        self._dfu_mode = False
+        self.dfu_button.configure(state="normal")
+        self.maintenance_var.set("Monitoring resumed. After flashing, allow several seconds for USB.")
+        self.reader = threading.Thread(target=self._read_loop, args=(self.port,), daemon=True)
+        self.reader.start()
 
     def _row(self, parent, label, var):
         frame = ttk.Frame(parent)
         frame.pack(fill="x", padx=8, pady=3)
         ttk.Label(frame, text=label, width=14, anchor="w").pack(side="left")
-        ttk.Label(frame, textvariable=var, style="Value.TLabel", anchor="e").pack(side="right", fill="x", expand=True)
+        ttk.Label(frame, textvariable=var, style="Value.TLabel", anchor="e", wraplength=600).pack(side="right", fill="x", expand=True)
 
     @staticmethod
     def _kv(items):
@@ -234,20 +333,24 @@ class MonitorApp:
 
     def _read_loop(self, port):
         """Reconnect-forever serial reader. Pushes (kind, payload) into the queue."""
-        while True:
+        capture = open(self.capture_path, "a", encoding="utf-8", buffering=1) if self.capture_path else None
+        while not self._reader_stop.is_set():
             try:
-                ser = serial.Serial(port, 115200, timeout=1)
+                ser = serial.Serial(port, 115200, timeout=0.2)
             except Exception as exc:
                 self.q.put(("status", f"cannot open {port}: {exc}"))
-                time.sleep(2)
+                self._reader_stop.wait(2)
                 continue
 
             self.q.put(("status", f"connected: {port}"))
             try:
                 ser.reset_input_buffer()
-                for raw in ser:
+                while not self._reader_stop.is_set():
+                    raw = ser.readline()
                     line = raw.decode("utf-8", errors="replace").strip()
                     if line:
+                        if capture:
+                            capture.write(line + "\n")
                         self.q.put(("line", line))
             except Exception as exc:
                 self.q.put(("status", f"disconnected: {exc}"))
@@ -256,7 +359,9 @@ class MonitorApp:
                     ser.close()
                 except Exception:
                     pass
-            time.sleep(1)
+            self._reader_stop.wait(1)
+        if capture:
+            capture.close()
 
     def _poll(self):
         try:
@@ -267,11 +372,24 @@ class MonitorApp:
                     self._handle_line(val)
                 elif kind == "status":
                     self.footer_var.set(val)
+                elif kind in ("dfu_ok", "dfu_error"):
+                    self._dfu_busy = False
+                    self._dfu_mode = kind == "dfu_ok"
+                    self.resume_button.configure(state="normal")
+                    self.dfu_button.configure(state="disabled" if self._dfu_mode else "normal")
+                    self.maintenance_var.set("DFU VERIFIED (0483:df11). Flash the selected image, then Reconnect."
+                                             if self._dfu_mode else "DFU NOT VERIFIED: " + val)
+                    self.footer_var.set("Monitoring paused; serial port released")
+                    if self._dfu_mode:
+                        self.status_var.set("ROM DFU active; flight application stopped")
+                        self.status_lbl.configure(fg=self.amber)
+                        self.armed_var.set("Application stopped")
+                        self.out_var.set("PWM stopped in ROM DFU")
         except queue.Empty:
             pass
 
         # Data watchdog: if the stream stalls, surface it instead of freezing.
-        if time.time() - self._last_data > 3:
+        if not self._reader_stop.is_set() and time.time() - self._last_data > 3:
             self.footer_var.set("no data — reconnecting...")
 
         self._expire_sensor_data(time.time())
@@ -292,12 +410,43 @@ class MonitorApp:
                 var.set("--")
 
     def _handle_line(self, line):
+        if line.startswith("{"):
+            self.status_var.set("Sensor-test firmware; flight-app upload pending")
+            self.status_lbl.configure(fg=self.amber)
+            self.footer_var.set("JSON sensor-test stream; STM32FC tagged CSV required")
+            return
         parts = line.split(",")
         if not parts:
             return
         tag = parts[0]
+        if hasattr(self, "diag_tree"):
+            key = tag + (":" + parts[1] if tag == "SCHED" and len(parts) > 1 else "")
+            values = (key, ",".join(parts[2:] if tag == "SCHED" else parts[1:]))
+            if self.diag_tree.exists(key):
+                self.diag_tree.item(key, values=values)
+            elif len(self.diag_tree.get_children()) < 100:
+                self.diag_tree.insert("", "end", iid=key, values=values)
 
-        if tag == "BMP" and len(parts) == 4:
+        if tag == "IMU_CONFIG":
+            kv = self._kv(parts[1:])
+            self.imu_model = kv.get("model", "IMU")
+            if hasattr(self, "imu_diag_var"):
+                self.imu_diag_var.set(f"Errors {kv.get('error0', '--')} / {kv.get('error1', '--')}  ·  "
+                                      f"registers {kv.get('regs0', '--')} / {kv.get('regs1', '--')}")
+            if hasattr(self, "root"):
+                self.root.title(f"STM32FC — dual {self.imu_model} + BMP581 + GNSS")
+
+        elif tag == "BMP_HEALTH":
+            kv = self._kv(parts[1:])
+            if hasattr(self, "bmp_health_var"):
+                self.bmp_health_var.set(f"{'healthy' if kv.get('valid') == '1' else 'unavailable'}  ·  error {kv.get('error', '--')}")
+
+        elif tag == "SD_DBG" and len(parts) > 2:
+            kv = self._kv(parts[3:])
+            self.sd_var.set(f"{'logging ' + parts[2] if parts[1] == '1' else 'not logging'}  ·  "
+                            f"bytes {kv.get('bytes', '--')}  ·  log drops {kv.get('log_drops', '--')}  ·  USB drops {kv.get('usb_drops', '--')}")
+
+        elif tag == "BMP" and len(parts) == 4:
             try:
                 p = float(parts[1])
                 t = float(parts[2])
@@ -435,7 +584,7 @@ class MonitorApp:
 
         elif tag == "IMU_HEALTH" and len(parts) == 6:
             h0, h1, active, ambiguous, valid = parts[1:]
-            self.status_var.set(f"IMUs {h0}/{h1}  active #{int(active)+1}" +
+            self.status_var.set(f"{getattr(self, 'imu_model', 'IMU')} {h0}/{h1}  active #{int(active)+1}" +
                                 ("  DISAGREE" if ambiguous == "1" else ""))
             self.status_lbl.configure(fg=self.green if valid == "1" else self.red)
             if valid != "1":
@@ -445,22 +594,23 @@ class MonitorApp:
         elif tag == "BMI_STATUS" and len(parts) == 2:
             self._connected = (parts[1] == "1")
             if self._connected:
-                self.status_var.set("BMI270 initialization OK; waiting for samples")
+                self.status_var.set("IMU initialization OK; waiting for samples")
                 self.status_lbl.configure(fg=self.amber)
             else:
-                self.status_var.set("dual BMI270: NOT FOUND")
+                self.status_var.set("dual IMU: NOT FOUND")
                 self.status_lbl.configure(fg=self.red)
 
 
 def main():
-    ap = argparse.ArgumentParser(description="dual BMI270 + BMP581 + GNSS monitor GUI")
+    ap = argparse.ArgumentParser(description="dual IMU + BMP581 + GNSS monitor GUI")
     ap.add_argument("--port", "-p", default=None, help="serial port (default: auto-detect)")
+    ap.add_argument("--capture", help="append received diagnostics to this local text file")
     args = ap.parse_args()
 
     port = args.port or detect_port()
 
     root = tk.Tk()
-    MonitorApp(root, port)
+    MonitorApp(root, port, args.capture)
     root.mainloop()
 
 

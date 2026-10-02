@@ -12,7 +12,7 @@ class Value:
     def set(self,value):self.value=value
     def configure(self,**kw):self.value=kw
 app=ns['MonitorApp'].__new__(ns['MonitorApp'])
-for key in ('roll','pitch','yaw','acc','gyr','pressure','temp','alt','fix','pos','gps_alt','gps_speed','status','sats','gps_time','cal'):
+for key in ('roll','pitch','yaw','acc','gyr','pressure','temp','alt','fix','pos','gps_alt','gps_speed','status','sats','gps_time','cal','imu_diag','bmp_health','sd'):
     setattr(app,key+'_var',Value())
 app.status_lbl=Value();app.green='green';app.red='red';app.amber='amber'
 app._last_att=app._last_bmp=app._last_gps=0
@@ -31,4 +31,13 @@ app._expire_sensor_data(time.time()+3)
 assert 'STALE' in app.pressure_var.value and 'STALE' in app.fix_var.value and app.pos_var.value=='--'
 app._handle_line('ATT,nan,0,0')
 assert app._last_att==0
-print('7 GUI parser/freshness checks passed (headless; visual layout not tested)')
+app._handle_line('IMU_CONFIG,model=BMI323,mag=0,error0=0,error1=0')
+assert app.imu_model=='BMI323'
+app._handle_line('IMU_HEALTH,1,1,0,0,1')
+assert 'BMI323 1/1' in app.status_var.value
+assert 'Errors 0 / 0' in app.imu_diag_var.value
+app._handle_line('BMP_HEALTH,valid=1,error=0')
+assert 'healthy' in app.bmp_health_var.value
+app._handle_line('SD_DBG,0,,bytes=0,log_drops=0,usb_drops=12')
+assert 'not logging' in app.sd_var.value and 'USB drops 12' in app.sd_var.value
+print('12 GUI parser/freshness checks passed (headless; visual layout not tested)')

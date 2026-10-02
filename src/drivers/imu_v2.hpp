@@ -11,5 +11,7 @@ bool bias_ready();
 bool sensor_healthy(unsigned index);
 bool ambiguous();
 unsigned active();
+int driver_error(unsigned index);
+uint32_t driver_health_registers(unsigned index);
 const estimation::ImuSample& latest();
 }

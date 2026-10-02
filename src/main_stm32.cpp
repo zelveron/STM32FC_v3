@@ -312,6 +312,7 @@ void task_bmi() // 400 Hz FIFO service, both BMI270s
 }
 void task_mag()
 {
+    if(!config::enable_magnetometer) return;
     mag350::Sample m;
     if(mag350::poll(m)) {
         L().print(F("MAG,")); L().print(m.x_ut,2); L().print(',');
@@ -524,6 +525,14 @@ void task_debug()   // 2 Hz -- low-rate status lines (no blocking calls here)
     static uint32_t l_est = 0;
     if ((now - l_est) >= 1000) {
         l_est = now;
+        L().print(F("IMU_CONFIG,model=")); L().print(config::imu_model);
+        L().print(F(",mag=")); L().print(config::enable_magnetometer?1:0);
+        L().print(F(",error0=")); L().print(imu_v2::driver_error(0));
+        L().print(F(",error1=")); L().print(imu_v2::driver_error(1));
+        L().print(F(",regs0=")); L().print(imu_v2::driver_health_registers(0),HEX);
+        L().print(F(",regs1=")); L().println(imu_v2::driver_health_registers(1),HEX);
+        L().print(F("BMP_HEALTH,valid=")); L().print(bmp581::healthy()?1:0);
+        L().print(F(",error=")); L().println(bmp581::error());
         float bx, by, bz; ahrs::gyro_bias_dps(bx, by, bz);
         L().print(F("IMU_HEALTH,")); L().print(imu_v2::sensor_healthy(0)); L().print(',');
         L().print(imu_v2::sensor_healthy(1)); L().print(','); L().print(imu_v2::active()); L().print(','); L().print(imu_v2::ambiguous());
@@ -582,9 +591,22 @@ void task_sched_report()   // 1 Hz -- per-task DWT timing + overruns
     L().print(F(",worst_pass_us="));       L().println(sched::worst_pass_us());
 }
 
+// Explicit USB maintenance command, for a landed/disarmed aircraft. This is
+// not a ground detector. Fresh RC must show CH5 off and throttle <= 5%; after
+// first arming, stale RC/failsafe must never authorize a reboot.
+bool dfu_allowed()
+{
+    if (s_arming.armed() || s_flying) return false;
+    const bool linked = crsf::receiving();
+    if (s_flight_session && (!linked || s_failsafe.active())) return false;
+    const auto& ch = crsf::channels();
+    return !linked || (ch.us[kArmCh] <= kArmHi && ch.us[kThrCh] <= 1050);
+}
+
 // Bench command reader over USB CDC. Newline-terminated tokens:
 //   RESET_STATS   -- zero the scheduler counters for a clean measurement window
-//   REBOOT_BL     -- jump to the STM32 system bootloader (DFU) without the button
+//   dfu          -- reset into STM32 ROM DFU, without BOOT/RESET buttons
+//   REBOOT_BL    -- compatibility alias for dfu
 void task_cmd()   // 10 Hz
 {
     static char buf[24];
@@ -598,11 +620,20 @@ void task_cmd()   // 10 Hz
             if(overflow) { overflow=false; len=0; L().println(F("NAK,OVERFLOW")); continue; }
             buf[len] = 0;
             if      (!strcmp(buf, "RESET_STATS")) { sched::reset_stats(); L().println(F("ACK,RESET_STATS")); }
-            else if (!strcmp(buf, "REBOOT_BL") && !s_flight_session && !s_arming.armed()) { L().println(F("ACK,REBOOT_BL")); hal::jump_to_bootloader(); }
+            else if (!strcmp(buf, "dfu") || !strcmp(buf, "REBOOT_BL")) {
+                if (dfu_allowed()) {
+                    len=0; // clear before the noreturn call (also used by mocks)
+                    L().println(F("ACK,DFU")); // best effort; reset may precede USB TX
+                    hal::jump_to_bootloader();
+                }
+                else L().println(F("NAK,DFU,DISARM_IDLE_REQUIRED"));
+            }
             else if (len)                         { L().print(F("NAK,")); L().println(buf); }
             len = 0;
         } else if (overflow) {
             continue;
+        } else if (c < 0x20 || c > 0x7e) {
+            len = 0; overflow=true; // binary/NUL cannot turn a prefix into a command
         } else if (len < sizeof(buf) - 1) {
             buf[len++] = (char)c;
         } else {
@@ -625,7 +656,8 @@ void setup()
     crsf::begin(420000);   // ER8 on J2 / UART4 (PA1 rx / PA0 tx), 420000 8N1
 
     s_log=&usb_stream::log();
-    L().println(F("boot: v2.2 dual BMI270/BMP581/BMM350/SAM-M10Q; development build"));
+    L().print(F("boot: v2.2 dual ")); L().print(config::imu_model);
+    L().println(F("/BMP581/SAM-M10Q; development build"));
     L().println(config::flight_enabled?F("FLIGHT_GATE,enabled"):F("FLIGHT_GATE,bench_motor_inhibit"));
     // Define outputs and idle before sensor/storage bring-up, without a USB wait.
     for(unsigned i=0;i<8;++i) {
@@ -675,8 +707,8 @@ void setup()
     L().println(bmp_ok ? F("BMP_STATUS,1") : F("BMP_STATUS,0"));
     ublox::drain_rx();
 
-    const bool mag_ok=!watchdog_reset && mag350::begin();
-    L().println(mag_ok?F("MAG_STATUS,1"):F("MAG_STATUS,0"));
+    const bool mag_ok=config::enable_magnetometer && !watchdog_reset && mag350::begin();
+    L().println(!config::enable_magnetometer?F("MAG_STATUS,disabled"):mag_ok?F("MAG_STATUS,1"):F("MAG_STATUS,0"));
     if(config::enable_sd_logging && !watchdog_reset) switch (sd_bin_log::begin(s_log_ring)) {
         case sd_bin_log::Result::ok:
             L().print(F("SD_STATUS,1,")); L().println(sd_bin_log::name()); break;
@@ -699,7 +731,7 @@ void setup()
 
     sched::add("gps",       50, task_gps);
     sched::add("crsf_tx",  100, task_crsf_tx);    // FC -> handset telemetry
-    sched::add("mag",       50, task_mag);
+    if(config::enable_magnetometer) sched::add("mag",50,task_mag);
     sched::add("bmp",      100, task_bmp);
     sched::add("ctl_log",  100, task_control_log);
     sched::add("log",       50, task_log);        // pack frame -> ring (fast)

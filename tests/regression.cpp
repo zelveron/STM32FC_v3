@@ -110,6 +110,7 @@ const char* name(){return "MOCK";}uint32_t bytes_written(){return 0;}
 uint32_t flush_step(uint32_t){++mock::sd_calls;return 0;}void sync(){++mock::sd_calls;}
 }
 namespace bmp581 {
+int error(){return 0;}
 bool begin(){return true;} bool healthy(){return true;}
 bool poll(Sample& s){if(!mock::bmp_sample)return false;mock::bmp_sample=false;s.pressure_pa=mock::bmp_pa;s.temp_c=20;return true;}
 }
@@ -121,6 +122,8 @@ bool healthy(){return mock::imu_ok && ahrs::valid();}
 bool bias_ready(){return mock::imu_bias;}
 bool sensor_healthy(unsigned){return mock::imu_ok;}
 bool ambiguous(){return false;} unsigned active(){return 0;}
+int driver_error(unsigned){return 0;}
+uint32_t driver_health_registers(unsigned){return 0;}
 const estimation::ImuSample& latest(){static estimation::ImuSample s{};return s;}
 }
 namespace mag350 {
@@ -159,11 +162,13 @@ int main() {
         std::printf("%d checks, %d failures\n",checks,failures);return failures?1:0;
     }
     check("valid deliberate arming applies pilot throttle",s_arming.armed()&&pwm[6]==1600);
+    usb_command="\ndfu\n";task_cmd();check("DFU rejected while armed",!rebooted);
     // Continue real link-statistics packets while channels cease.
     for(unsigned n=0;n<79;++n){frame(0x14,std::vector<uint8_t>(10,0));step(false,true);}
     check("last valid RC is usable just before age timeout",s_arming.armed());
     step(false,true);
     check("200 ms RC age cuts both motors",s_failsafe.active()&&pwm[6]==1000&&pwm[7]==1000);
+    usb_command="dfu\n";task_cmd();check("DFU rejected during airborne RC failsafe",!rebooted);
     run(100,false,true);
     check("healthy failsafe commands roll toward level",s_mode_cur==modes::Id::assist&&pwm[0]<1500);
     check("failsafe keeps flight session latched",s_flight_session);
@@ -183,13 +188,26 @@ int main() {
     s_flight_session=true;bmp_sample=true;bmp_pa=90000;task_bmp();
     check("airborne disarm preserves barometric ground reference",g_alt_agl_m>900);
     task_log_flush();check("asynchronous SD service continues after arming",sd_calls>0);
-    usb_command="REBOOT_BL\n";task_cmd();check("bootloader rejected after flight session",!rebooted);
+    usb_command="\ndfu\r\n";try{task_cmd();}catch(int){}
+    check("DFU accepted after explicit disarm and idle on fresh link",rebooted);
+    rebooted=false;
     const bool flying_before=s_flying;
     usb_command="SIM_FLYING 1\n";task_cmd();check("simulation override removed from flight commands",s_flying==flying_before);
     s_flight_session=false;usb_command=std::string(24,'x')+"REBOOT_BL\n";
     task_cmd();check("overflowed USB line cannot execute its suffix",!rebooted);
+    usb_command=std::string("dfu\0extra\n",10);task_cmd();
+    check("binary USB command cannot execute DFU prefix",!rebooted);
+    rc(true);usb_command="dfu\n";task_cmd();
+    check("disarmed DFU rejects high CH5",!rebooted);
+    rc(false,1152);usb_command="dfu\n";task_cmd();
+    check("disarmed DFU rejects raised throttle",!rebooted);
+    rc(false);s_flying=true;usb_command="dfu\n";task_cmd();
+    check("DFU rejects flight eligibility even if disarmed",!rebooted);s_flying=false;
+    now_us+=250000;s_flight_session=true;usb_command="dfu\n";task_cmd();
+    check("DFU rejects stale RC after flight session",!rebooted);
+    s_flight_session=false;
     usb_command="REBOOT_BL\n";try{task_cmd();}catch(int){}
-    check("bootloader works on ground before first arm",rebooted);
+    check("legacy bootloader alias works before first arm without RC",rebooted);
 
     // Independent arming policy, including cold boot and recovery provenance.
     core::Arming arm;

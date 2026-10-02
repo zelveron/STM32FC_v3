@@ -18,7 +18,7 @@ Baseline: STM32FC_v2 commit `3daf518b5e1759f63fb84008d8d34c5e17c0dda6`. Target: 
 | R10: host/receiver baud changes could desynchronize GNSS | SAM-M10Q default 38400, passive host-side discovery, no unacknowledged receiver reconfiguration | UART command-capture regression |
 | R11: barometer advertised 50 Hz but effective forced sequence was about 10 Hz | Normal 50 Hz configuration, pressure oversampling, explicit ready-source enable and fresh-event polling | Real Bosch API + I2C register model tests; physical ODR/timing validation pending |
 | R12: disarm could reset the altitude reference while airborne | First-arm flight-session latch holds the pressure datum across disarm and RC loss | Actual application regression |
-| R13: USB bootloader command could reboot an armed controller | Bootloader command allowed only before first arming; overflowed lines discarded; simulated-flight override removed | Application USB command tests |
+| R13: USB bootloader command could reboot an armed controller | DFU requires disarm/idle; after arming also fresh RC and completed failsafe recovery. Overflowed/binary lines discarded; simulated-flight override removed; reset-first ROM entry | Application USB command tests |
 | R14: logging could miss final partial data and hide flush failures | Sector envelopes, asynchronous tail drain, session/sequence/CRC recovery, owned-extent bounds | Logger/card fault models and Python recovery tests; actual card behavior still untested |
 
 ## v2-specific implementation

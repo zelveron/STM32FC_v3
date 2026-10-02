@@ -1,5 +1,7 @@
 # v2.2 hardware and connection guide
 
+**Assembly correction, 2026-10-02:** the connected board has two **BMI323s**, confirmed by chip IDs `0x43` and by the user, and no assembled BMM350. The bus/GPIO map below remains the target; its earlier BMI270/BMM350 component listing describes the planned assembly. Use `v2_bmi323` for the actual board; see [assembled-board bring-up](ASSEMBLED_BOARD.md).
+
 This pin map was extracted from both `Plane_Board_Design.kicad_sch` and `Plane_Board_Design.kicad_pcb` in the supplied v2.2 project on 2026-09-28. PCB SHA-256: `650df54016c0231be7eda7023f24f1544af7a5d8e15cb844f49c6cadcc7422e5`. The firmware targets this board, not the older BMI323/F407VE board.
 
 ## Manufactured-board corrections come first

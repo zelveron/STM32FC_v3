@@ -150,7 +150,7 @@ This catalog describes the **implemented STM32FC_v3 development firmware for PCB
 - Mode labels distinguish bench builds, disarmed/armed modes, failsafe, stabilization lockout and timing faults.
 - Invalid/stale sensors do not generate new normal telemetry for that sensor; the radio must still handle stale previously received values.
 - USB sensor, receiver, actuator, calibration, dual-IMU health, active/requested mode, logging and timing diagnostics.
-- Ground commands: reset scheduler statistics and enter the bootloader. Bootloader entry is prohibited after the first arming; old simulated-flight override removed.
+- Ground commands: reset scheduler statistics and enter ROM DFU using `dfu` (legacy `REBOOT_BL` alias). Armed/flight-state entry is rejected; after arming, require fresh RC, completed failsafe recovery, CH5 off and idle throttle. The GUI releases the serial port and verifies the DFU USB identity. Reset-first entry works with the watchdog; see [DFU guide](DFU.md). The old simulated-flight override remains removed.
 - Python GUI updated for dual-IMU status and stale attitude/barometer/GPS expiry; log decoding/plotting tools retained. Additional tags can be viewed with a serial terminal.
 - Repeatable host regression suite plus nominal and assisted-flight simulation; actual Bosch BMI270 API exercised against an SPI/FIFO emulator.
 

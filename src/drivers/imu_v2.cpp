@@ -1,13 +1,19 @@
 #include "imu_v2.hpp"
-#include "bmi270.hpp"
 #include "../config/airframe.hpp"
+#if FC_IMU_BMI323
+#include "bmi323_fifo.hpp"
+namespace sensor = imu323;
+#else
+#include "bmi270.hpp"
+namespace sensor = imu270;
+#endif
 #include "../core/imu_selection.hpp"
 #include "../estimation/imu_rotation.hpp"
 #include "../estimation/ahrs.hpp"
 #include <cmath>
 namespace imu_v2 {
 namespace {
-imu270::Device device[2];
+sensor::Device device[2];
 estimation::ImuPrep prep[2];
 estimation::ImuSample sample[2]{};
 bool ready[2]={false,false},have[2]={false,false};
@@ -46,10 +52,10 @@ void poll(bool allow_calibration) {
     uint8_t counts[2]{};
     for(unsigned i=0;i<2;++i) {
         if(!ready[i]) continue;
-        imu270::Sample raw[8];
+        sensor::Sample raw[8];
         const auto result=device[i].read(raw,counts[i]);
-        if(result==imu270::Result::fault) { ready[i]=false; continue; }
-        if(result!=imu270::Result::ok) continue;
+        if(result==sensor::Result::fault) { ready[i]=false; continue; }
+        if(result!=sensor::Result::ok) continue;
         const uint32_t batch_time=hal::micros();
         for(unsigned n=0;n<counts[i];++n) {
             const float acc[3]={raw[n].ax_g,raw[n].ay_g,raw[n].az_g};
@@ -86,4 +92,18 @@ bool bias_ready() { return prep[selection.active()].bias_ready(); }
 bool ambiguous() { return selection.ambiguous(); }
 unsigned active() { return selection.active(); }
 const estimation::ImuSample& latest() { return sample[selection.active()]; }
+int driver_error(unsigned i) {
+#if FC_IMU_BMI323
+    return i<2 ? device[i].error() : -1;
+#else
+    return i<2 && ready[i] ? 0 : -1;
+#endif
+}
+uint32_t driver_health_registers(unsigned i) {
+#if FC_IMU_BMI323
+    return i<2 ? device[i].health_registers() : 0;
+#else
+    (void)i; return 0;
+#endif
+}
 }
