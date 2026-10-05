@@ -15,9 +15,9 @@ Usage:
 """
 
 import argparse
-import glob
 import math
 import os
+from pathlib import Path
 import queue
 import sys
 import threading
@@ -26,28 +26,18 @@ import time
 import serial
 import serial.tools.list_ports
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 from enter_dfu import request_dfu
 
 
 def detect_port():
     stm_ports = [p.device for p in serial.tools.list_ports.comports() if p.vid == 0x0483 and p.pid == 0x5740]
-    if len(stm_ports) == 1:
-        return stm_ports[0]
-    if len(stm_ports) > 1:
-        raise SystemExit("Multiple STM32 boards detected; select one with --port COMx")
-    for path in glob.glob("/dev/serial/by-id/*"):
-        name = os.path.basename(path)
-        if any(k in name for k in ("STMicroelectronics", "CDC", "F407", "stm32")):
-            return os.path.realpath(path)
-    acm = sorted(glob.glob("/dev/ttyACM*"))
-    if acm:
-        return acm[0]
-    return "/dev/ttyACM0"  # fallback; the reader keeps retrying until it appears
+    # Never choose an arbitrary serial device or guess between multiple boards.
+    return stm_ports[0] if len(stm_ports) == 1 else None
 
 
 class MonitorApp:
-    def __init__(self, root, port, capture_path=None):
+    def __init__(self, root, port=None, capture_path=None, start_reader=True):
         self.root = root
         self.port = port
         self.capture_path = capture_path
@@ -56,9 +46,11 @@ class MonitorApp:
         self._reader_stop = threading.Event()
         self._dfu_busy = False
         self._dfu_mode = False
+        self._reconnecting = False
+        self._link_open = False
         self._last_data = time.time()
         self._last_att = self._last_bmp = self._last_gps = 0.0
-        root.title("dual IMU + BMP581 + GNSS Monitor")
+        root.title("STM32FC — Flight Controller Monitor")
         root.geometry("920x960")
         root.minsize(720, 500)
         root.configure(bg="#1e1e1e")
@@ -103,8 +95,16 @@ class MonitorApp:
 
         maintenance = ttk.Frame(root)
         maintenance.pack(fill="x", padx=16, pady=4)
+        ttk.Label(maintenance, text="Port:").pack(side="left", padx=(0, 6))
+        self.port_var = tk.StringVar(value=port or "Auto-detect STM32")
+        self.port_combo = ttk.Combobox(maintenance, textvariable=self.port_var, state="readonly", width=22)
+        self.port_combo.pack(side="left", padx=(0, 8))
+        self.refresh_button = ttk.Button(maintenance, text="Refresh ports", command=self._refresh_ports)
+        self.refresh_button.pack(side="left", padx=(0, 8))
+        self._refresh_ports()
         self.dfu_button = ttk.Button(maintenance, text="Enter DFU", command=self._enter_dfu)
-        self.dfu_button.pack(side="left")
+        self.dfu_button.pack(side="right")
+        self.dfu_button.configure(state="disabled")
         self.resume_button = ttk.Button(maintenance, text="Reconnect", command=self._resume_reader)
         self.resume_button.pack(side="left", padx=8)
         self.maintenance_var = tk.StringVar(value="DFU: ground use only; disarm CH5 and lower throttle.")
@@ -227,7 +227,7 @@ class MonitorApp:
                   wraplength=800).pack(padx=6, pady=4)
 
         # --- footer ---
-        self.footer_var = tk.StringVar(value=f"connecting to {port} ...")
+        self.footer_var = tk.StringVar(value=f"Connecting to {port or 'STM32 (auto-detect)'} ...")
         ttk.Label(self.root, textvariable=self.footer_var, foreground="#888888").pack(side="bottom", pady=6)
 
         self._connected = False
@@ -236,7 +236,8 @@ class MonitorApp:
         self.green = green
 
         self.reader = threading.Thread(target=self._read_loop, args=(port,), daemon=True)
-        self.reader.start()
+        if start_reader:
+            self.reader.start()
         self.root.protocol("WM_DELETE_WINDOW", self._close)
         root.after(50, self._poll)
 
@@ -245,11 +246,12 @@ class MonitorApp:
         self.root.destroy()
 
     def _enter_dfu(self):
-        if self._dfu_busy or self._dfu_mode:
+        if self._dfu_busy or self._dfu_mode or self._reconnecting or not self._link_open:
             return
         self._dfu_busy = True
         self.dfu_button.configure(state="disabled")
         self.resume_button.configure(state="disabled")
+        self.port_combo.configure(state="disabled")
         self.maintenance_var.set("Releasing serial port, requesting DFU, then verifying 0483:df11...")
         self._reader_stop.set()
         threading.Thread(target=self._dfu_worker, daemon=True).start()
@@ -267,14 +269,44 @@ class MonitorApp:
             self.q.put(("dfu_error", str(exc)))
 
     def _resume_reader(self):
-        if self._dfu_busy or self.reader.is_alive():
+        if self._dfu_busy or self._reconnecting:
             return
+        self._reconnecting = True
+        self._reader_stop.set()
+        self.resume_button.configure(state="disabled")
+        self.dfu_button.configure(state="disabled")
+        self.port_combo.configure(state="disabled")
+        self.maintenance_var.set("Releasing previous connection...")
+        self._finish_reconnect()
+
+    def _finish_reconnect(self):
+        # Do not block Tk, or start a second owner of the same serial handle.
+        if self.reader.is_alive():
+            self.root.after(100, self._finish_reconnect)
+            return
+        while not self.q.empty():
+            self.q.get_nowait()
+        self._link_open = False
+        selected = self.port_var.get()
+        self.port = None if selected == "Auto-detect STM32" else selected
         self._reader_stop.clear()
         self._dfu_mode = False
-        self.dfu_button.configure(state="normal")
+        self._reconnecting = False
+        self.port_combo.configure(state="readonly")
+        self.resume_button.configure(state="normal")
+        self._last_att = self._last_bmp = self._last_gps = 0
+        self.status_var.set("dual IMU: waiting...")
+        self.status_lbl.configure(fg=self.red)
         self.maintenance_var.set("Monitoring resumed. After flashing, allow several seconds for USB.")
         self.reader = threading.Thread(target=self._read_loop, args=(self.port,), daemon=True)
         self.reader.start()
+
+    def _refresh_ports(self):
+        ports = sorted(p.device for p in serial.tools.list_ports.comports())
+        selected = self.port_var.get()
+        if selected != "Auto-detect STM32" and selected not in ports:
+            ports.append(selected)
+        self.port_combo.configure(values=["Auto-detect STM32"] + ports)
 
     def _row(self, parent, label, var):
         frame = ttk.Frame(parent)
@@ -333,16 +365,25 @@ class MonitorApp:
 
     def _read_loop(self, port):
         """Reconnect-forever serial reader. Pushes (kind, payload) into the queue."""
-        capture = open(self.capture_path, "a", encoding="utf-8", buffering=1) if self.capture_path else None
+        try:
+            capture = open(self.capture_path, "a", encoding="utf-8", buffering=1) if self.capture_path else None
+        except OSError as exc:
+            self.q.put(("status", f"Cannot open capture file: {exc}"))
+            return
         while not self._reader_stop.is_set():
             try:
-                ser = serial.Serial(port, 115200, timeout=0.2)
+                current_port = port or detect_port()
+                if current_port is None:
+                    self.q.put(("status", "Waiting for one STM32 board. If several are connected, choose a port and Reconnect."))
+                    self._reader_stop.wait(1)
+                    continue
+                ser = serial.Serial(current_port, 115200, timeout=0.2)
             except Exception as exc:
                 self.q.put(("status", f"cannot open {port}: {exc}"))
                 self._reader_stop.wait(2)
                 continue
 
-            self.q.put(("status", f"connected: {port}"))
+            self.q.put(("connected", current_port))
             try:
                 ser.reset_input_buffer()
                 while not self._reader_stop.is_set():
@@ -359,6 +400,7 @@ class MonitorApp:
                     ser.close()
                 except Exception:
                     pass
+                self.q.put(("disconnected", None))
             self._reader_stop.wait(1)
         if capture:
             capture.close()
@@ -372,11 +414,22 @@ class MonitorApp:
                     self._handle_line(val)
                 elif kind == "status":
                     self.footer_var.set(val)
+                elif kind == "connected":
+                    self.port = val
+                    self._link_open = True
+                    self._last_data = time.time()
+                    self.footer_var.set(f"Connected: {val}")
+                    if not self._dfu_busy and not self._reconnecting:
+                        self.dfu_button.configure(state="normal")
+                elif kind == "disconnected":
+                    self._link_open = False
+                    self.dfu_button.configure(state="disabled")
                 elif kind in ("dfu_ok", "dfu_error"):
                     self._dfu_busy = False
                     self._dfu_mode = kind == "dfu_ok"
                     self.resume_button.configure(state="normal")
-                    self.dfu_button.configure(state="disabled" if self._dfu_mode else "normal")
+                    self.port_combo.configure(state="readonly")
+                    self.dfu_button.configure(state="disabled")
                     self.maintenance_var.set("DFU VERIFIED (0483:df11). Flash the selected image, then Reconnect."
                                              if self._dfu_mode else "DFU NOT VERIFIED: " + val)
                     self.footer_var.set("Monitoring paused; serial port released")
@@ -389,8 +442,8 @@ class MonitorApp:
             pass
 
         # Data watchdog: if the stream stalls, surface it instead of freezing.
-        if not self._reader_stop.is_set() and time.time() - self._last_data > 3:
-            self.footer_var.set("no data — reconnecting...")
+        if self._link_open and not self._reader_stop.is_set() and time.time() - self._last_data > 3:
+            self.footer_var.set(f"Connected: {self.port} — no recent data")
 
         self._expire_sensor_data(time.time())
         self.root.after(50, self._poll)
@@ -605,14 +658,36 @@ def main():
     ap = argparse.ArgumentParser(description="dual IMU + BMP581 + GNSS monitor GUI")
     ap.add_argument("--port", "-p", default=None, help="serial port (default: auto-detect)")
     ap.add_argument("--capture", help="append received diagnostics to this local text file")
+    ap.add_argument("--self-test", metavar="REPORT", help=argparse.SUPPRESS)
     args = ap.parse_args()
 
-    port = args.port or detect_port()
+    if args.self_test:
+        from gui_selftest import run
+        return run(args.self_test)
 
     root = tk.Tk()
-    MonitorApp(root, port, args.capture)
+    def report_error(exc_type, exc, tb):
+        import traceback
+        import tempfile
+        log = Path(os.environ.get("LOCALAPPDATA", tempfile.gettempdir())) / "STM32FC-GUI" / "error.log"
+        try:
+            log.parent.mkdir(parents=True, exist_ok=True)
+            with log.open("a", encoding="utf-8") as stream:
+                traceback.print_exception(exc_type, exc, tb, file=stream)
+            detail = f"\n\nDetails: {log}"
+        except OSError:
+            detail = ""
+        messagebox.showerror("STM32FC GUI error", str(exc) + detail, parent=root)
+    root.report_callback_exception = report_error
+    try:
+        MonitorApp(root, args.port, args.capture)
+    except Exception:
+        report_error(*sys.exc_info())
+        root.destroy()
+        return 1
     root.mainloop()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

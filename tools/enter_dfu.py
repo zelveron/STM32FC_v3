@@ -18,6 +18,11 @@ from serial.tools import list_ports
 def find_dfu_util(explicit=None):
     if explicit:
         return str(Path(explicit).resolve(strict=True))
+    # PyInstaller sets __file__ inside its extracted bundle. Prefer the tested
+    # copy shipped with the GUI over an unrelated executable on the user's PATH.
+    bundled = Path(__file__).resolve().parent / "vendor/dfu-util/dfu-util.exe"
+    if bundled.is_file():
+        return str(bundled)
     found = shutil.which("dfu-util")
     if found:
         return found

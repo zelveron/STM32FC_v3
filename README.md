@@ -12,6 +12,8 @@ The connected board reports **two BMI323s (chip ID 0x43), not BMI270s**, and the
 
 USB maintenance now supports `dfu` and the GUI **Enter DFU** button; see [DFU instructions](docs/DFU.md). The GUI includes an **All live parameters** diagnostic table.
 
+**Windows GUI:** [download the standalone EXE](https://github.com/zelveron/STM32FC_v3/releases/download/gui-2026.10.05/STM32FC-GUI.exe) or the [portable ZIP with documentation, licenses and sources](https://github.com/zelveron/STM32FC_v3/releases/download/gui-2026.10.05/STM32FC-GUI-2026.10.05-Windows-x64.zip), then double-click `STM32FC-GUI.exe`. Python, serial support and the DFU utility are bundled. It supports automatic USB detection and a COM-port selector. See the [portable GUI guide and build instructions](docs/GUI_WINDOWS.md). Windows USB drivers remain an OS requirement; binaries are distributed through [GitHub Releases](https://github.com/zelveron/STM32FC_v3/releases/tag/gui-2026.10.05) and are not checked into Git.
+
 The user confirmed that the documented electrical corrections were checked and that motors/servos were safe for bench work. That confirmation is not a set of measured electrical test results. See [assembled-board bring-up](docs/ASSEMBLED_BOARD.md) for the current driver, GUI, test evidence and physical bring-up status. The 2026-09-28 results below describe the earlier BMI270 target; they do not establish physical validation of this assembly.
 
 ```text

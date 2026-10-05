@@ -1,0 +1,43 @@
+STM32FC GUI — third-party notices
+
+The Windows GUI bundles these components. Their own licenses apply to them.
+The standalone EXE embeds these notices and the DFU source archives. The
+portable ZIP also includes readable copies in licenses/ and sources/.
+Keep these files together when redistributing the ZIP.
+
+Python 3.12.14, including its standard library and Microsoft runtime files
+  https://www.python.org/ — PSF and component notices: Python-LICENSE.txt.
+  Microsoft runtime distribution restrictions appear in that license file.
+
+Tcl/Tk 8.6
+  https://www.tcl.tk/ — BSD-style terms: Tcl-Tk-license.terms.
+  Exact runtime patch level is recorded by the package smoke test.
+
+pySerial 3.5
+  https://github.com/pyserial/pyserial — BSD-3-Clause; bundled license file.
+
+PyInstaller 6.22.3
+  https://pyinstaller.org/ — GPL-2.0-or-later with the bootloader distribution
+  exception; see the bundled PyInstaller license/copying files. The exception
+  permits distribution of the packaged application under its own terms.
+
+dfu-util 0.11 (separate child executable)
+  https://dfu-util.sourceforge.net/ — GPL-2.0-or-later.
+  Unmodified upstream win64 executable from dfu-util-0.11-binaries.tar.xz.
+  sources/dfu-util-0.11.tar.gz is the corresponding upstream source, including
+  INSTALL and build scripts. sources/dfu-util-binary-build.txt describes the
+  publisher's MinGW/Ubuntu build. Binary archive URLs and SHA256 hashes are
+  recorded in build-info.json and tools/build_gui.py.
+
+libusb (separate dynamic library used by dfu-util)
+  https://github.com/libusb/libusb — LGPL-2.1-or-later.
+  Upstream binary revision v1.0.24-66-g1a90627 (pre-1.0.25), as identified by
+  dfu-util's publisher. The DLL reports 1.0.24.11650. Exact source, including
+  build scripts, is in sources/libusb-1a90627.tar.gz. The library is dynamically
+  linked; to use a modified version, replace vendor/dfu-util/libusb-1.0.dll in
+  the diagnostic folder build or adapt the included packaging source and
+  rebuild the one-file EXE. These terms do not limit LGPL rights to modify,
+  replace or debug the library.
+
+The GUI is a local USB monitor. It uploads no aircraft data. Its DFU button
+executes dfu-util only to enumerate USB devices; it does not flash firmware.

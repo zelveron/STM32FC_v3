@@ -4,7 +4,7 @@ Use DFU on the bench with the aircraft landed, propulsion disconnected, CH5 off 
 
 ## Dashboard
 
-Run `python tools/gui.py` (or add `--port COM6`). Click **Enter DFU**. The dashboard stops its reader, closes the serial handle, sends the command and checks for **0483:df11** using dfu-util. It reports **DFU VERIFIED** only after the internal-flash interface appears. Monitoring stays paused so the programmer can use USB. After programming and restarting the board, click **Reconnect**. If Windows assigned a different COM number, restart the dashboard with that port.
+Run the [standalone Windows GUI](GUI_WINDOWS.md) or `python tools/gui.py` (optionally add `--port COM6`). Click **Enter DFU**. The dashboard stops its reader, closes the serial handle, sends the command and checks for **0483:df11** using dfu-util. It reports **DFU VERIFIED** only after the internal-flash interface appears. Monitoring stays paused so the programmer can use USB. After programming and restarting the board, click **Reconnect**. If Windows assigned a different COM number, choose **Auto-detect STM32**, or use **Refresh ports** and select the new COM port before reconnecting. The Windows EXE includes dfu-util; source-based runs still need it installed.
 
 ## Command line
 

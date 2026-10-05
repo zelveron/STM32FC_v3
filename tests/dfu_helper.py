@@ -11,6 +11,13 @@ DEVICE = 'Found DFU: [0483:df11] ver=2200, alt=0, name="@Internal Flash", serial
 
 
 class DfuTests(unittest.TestCase):
+    def test_bundled_utility_takes_priority_over_system_install(self):
+        expected = Path(dfu.__file__).resolve().parent / 'vendor/dfu-util/dfu-util.exe'
+        with patch.object(Path, 'is_file', return_value=True), \
+             patch.object(dfu.shutil, 'which') as which:
+            self.assertEqual(dfu.find_dfu_util(), str(expected))
+        which.assert_not_called()
+
     def test_only_rom_internal_flash_counts(self):
         self.assertEqual(dfu.dfu_devices(DEVICE), [DEVICE])
         for value in (DEVICE.replace('alt=0', 'alt=1'), DEVICE.replace('df11', '5740'),
