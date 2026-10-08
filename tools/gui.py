@@ -41,7 +41,7 @@ class MonitorApp:
         self.root = root
         self.port = port
         self.capture_path = capture_path
-        self.imu_model = "IMU"
+        self.imu_model = "BMI270"
         self.q = queue.Queue()
         self._reader_stop = threading.Event()
         self._dfu_busy = False
@@ -50,6 +50,9 @@ class MonitorApp:
         self._link_open = False
         self._last_data = time.time()
         self._last_att = self._last_bmp = self._last_gps = 0.0
+        self._last_gps_health = self._last_gps_message = 0.0
+        self._gps_health = None
+        self._last_imu_health = self._last_imu_config = self._last_bmp_health = 0.0
         root.title("STM32FC — Flight Controller Monitor")
         root.geometry("920x960")
         root.minsize(720, 500)
@@ -134,9 +137,13 @@ class MonitorApp:
         self._row(fc_frame, "Stab integrators", self.integ_var)
         self._row(fc_frame, "Gyro cal", self.cal_var)
         self.imu_diag_var = tk.StringVar(value="--")
+        self.imu1_diag_var = tk.StringVar(value="Waiting for diagnostics")
+        self.imu2_diag_var = tk.StringVar(value="Waiting for diagnostics")
         self.bmp_health_var = tk.StringVar(value="--")
         self.sd_var = tk.StringVar(value="--")
         self._row(fc_frame, "IMU diagnostics", self.imu_diag_var)
+        self._row(fc_frame, "BMI270 #1", self.imu1_diag_var)
+        self._row(fc_frame, "BMI270 #2", self.imu2_diag_var)
         self._row(fc_frame, "Barometer health", self.bmp_health_var)
         self._row(fc_frame, "SD / USB", self.sd_var)
 
@@ -161,7 +168,7 @@ class MonitorApp:
         self._row(bmp_frame, "Altitude", self.alt_var)
 
         # --- BMI section ---
-        bmi_frame = ttk.LabelFrame(root, text="dual IMU (IMU)")
+        bmi_frame = ttk.LabelFrame(root, text="BMI270 · selected IMU readings")
         bmi_frame.pack(fill="x", padx=16, pady=6)
 
         self.acc_var = tk.StringVar(value="--, --, -- g")
@@ -180,10 +187,12 @@ class MonitorApp:
         self.fix_var = tk.StringVar(value="--")
         self.gps_time_var = tk.StringVar(value="--")
         self.gps_speed_var = tk.StringVar(value="--")
+        self.gps_link_var = tk.StringVar(value="Waiting for GNSS status")
 
+        self._row(gps_frame, "Communication", self.gps_link_var)
         self._row(gps_frame, "Position", self.pos_var)
         self._row(gps_frame, "GPS Altitude", self.gps_alt_var)
-        self._row(gps_frame, "Satellites", self.sats_var)
+        self._row(gps_frame, "Satellites used", self.sats_var)
         self._row(gps_frame, "Fix", self.fix_var)
         self._row(gps_frame, "Time (UTC)", self.gps_time_var)
         self._row(gps_frame, "Speed", self.gps_speed_var)
@@ -295,6 +304,9 @@ class MonitorApp:
         self.port_combo.configure(state="readonly")
         self.resume_button.configure(state="normal")
         self._last_att = self._last_bmp = self._last_gps = 0
+        self._last_gps_health = self._last_gps_message = 0
+        self._gps_health = None
+        self._last_imu_health = self._last_imu_config = self._last_bmp_health = 0
         self.status_var.set("dual IMU: waiting...")
         self.status_lbl.configure(fg=self.red)
         self.maintenance_var.set("Monitoring resumed. After flashing, allow several seconds for USB.")
@@ -418,11 +430,16 @@ class MonitorApp:
                     self.port = val
                     self._link_open = True
                     self._last_data = time.time()
+                    self._last_gps_health = self._last_gps_message = 0.0
+                    self._gps_health = None
+                    self._last_imu_health = self._last_imu_config = self._last_bmp_health = 0.0
                     self.footer_var.set(f"Connected: {val}")
                     if not self._dfu_busy and not self._reconnecting:
                         self.dfu_button.configure(state="normal")
                 elif kind == "disconnected":
                     self._link_open = False
+                    self._last_gps_health = self._last_gps_message = 0.0
+                    self._last_imu_health = self._last_imu_config = self._last_bmp_health = 0.0
                     self.dfu_button.configure(state="disabled")
                 elif kind in ("dfu_ok", "dfu_error"):
                     self._dfu_busy = False
@@ -449,6 +466,15 @@ class MonitorApp:
         self.root.after(50, self._poll)
 
     def _expire_sensor_data(self, now):
+        if not getattr(self, "_dfu_mode", False) and now - getattr(self, "_last_imu_health", now) > 3.0:
+            self.status_var.set("BMI270 health unavailable / stale")
+            self.status_lbl.configure(fg=self.amber)
+        if now - getattr(self, "_last_imu_config", now) > 3.0:
+            for name in ("imu_diag_var", "imu1_diag_var", "imu2_diag_var"):
+                if hasattr(self, name):
+                    getattr(self, name).set("Diagnostics unavailable / stale")
+        if now - getattr(self, "_last_bmp_health", now) > 3.0:
+            self.bmp_health_var.set("Health unavailable / stale")
         if now - self._last_att > 0.3:
             self._last_att = 0
             for var in (self.roll_var, self.pitch_var, self.yaw_var, self.acc_var, self.gyr_var):
@@ -461,6 +487,41 @@ class MonitorApp:
             self.fix_var.set("STALE / no valid fix")
             for var in (self.pos_var, self.gps_alt_var, self.gps_speed_var):
                 var.set("--")
+        self._update_gps_status(now)
+
+    @staticmethod
+    def _imu_error_label(code):
+        return {0: "No driver error", 1: "SPI setup failed", 2: "Power-save setup failed",
+                3: "Configuration read failed", 4: "Sensor setup failed", 5: "FIFO setup failed",
+                6: "FIFO flush failed", 7: "Identity / health check failed", 8: "FIFO backlog / length fault",
+                9: "Sensor clock fault", 10: "FIFO transfer failed", 11: "Invalid paired FIFO frame",
+                12: "Clipped sensor sample", 103: "Chip ID mismatch (expected 0x24)",
+                109: "Configuration image load failed"}.get(code, "Bosch initialization failed" if code >= 100 else "Unknown driver error")
+
+    def _update_gps_status(self, now):
+        health = getattr(self, "_gps_health", None)
+        if health is not None and now - self._last_gps_health < 3.0:
+            if health["nmea"]:
+                self.gps_link_var.set(f"Communication OK · {health['baud']} baud")
+                self.sats_var.set(str(health["used"]) if health["used"] >= 0 else "--")
+                if health["fix"] > 0:
+                    self.fix_var.set(self._fix_label(health["fix"]))
+                else:
+                    self.fix_var.set({0: "No fix · no satellites reported in view",
+                                      1: "No fix · satellites in view"}.get(
+                                          health["visible"], "No fix · satellite visibility unknown"))
+            else:
+                self.gps_link_var.set("Bytes received · no valid NMEA" if health["rx"]
+                                      else "No GNSS data received")
+                self.fix_var.set("Unavailable")
+                self.sats_var.set("--")
+        elif now - getattr(self, "_last_gps_message", 0) < 2.0:
+            self.gps_link_var.set("Communication OK · legacy telemetry")
+            if not self._last_gps:
+                self.fix_var.set("No valid fix")
+        else:
+            self.gps_link_var.set("GNSS status unavailable / stale")
+            self.sats_var.set("--")
 
     def _handle_line(self, line):
         if line.startswith("{"):
@@ -482,17 +543,37 @@ class MonitorApp:
 
         if tag == "IMU_CONFIG":
             kv = self._kv(parts[1:])
+            try:
+                errors = [int(kv[f"error{i}"]) for i in range(2)]
+            except (KeyError, ValueError):
+                return
+            self._last_imu_config = time.time()
             self.imu_model = kv.get("model", "IMU")
             if hasattr(self, "imu_diag_var"):
                 self.imu_diag_var.set(f"Errors {kv.get('error0', '--')} / {kv.get('error1', '--')}  ·  "
                                       f"registers {kv.get('regs0', '--')} / {kv.get('regs1', '--')}")
+            for i, code in enumerate(errors):
+                if hasattr(self, f"imu{i+1}_diag_var"):
+                    getattr(self, f"imu{i+1}_diag_var").set(f"{self._imu_error_label(code)} · code {code}")
             if hasattr(self, "root"):
                 self.root.title(f"STM32FC — dual {self.imu_model} + BMP581 + GNSS")
 
         elif tag == "BMP_HEALTH":
             kv = self._kv(parts[1:])
+            try:
+                code = int(kv["error"])
+                valid = int(kv["valid"])
+            except (KeyError, ValueError):
+                return
+            if valid not in (0, 1):
+                return
+            self._last_bmp_health = time.time()
             if hasattr(self, "bmp_health_var"):
-                self.bmp_health_var.set(f"{'healthy' if kv.get('valid') == '1' else 'unavailable'}  ·  error {kv.get('error', '--')}")
+                reason = {0: "No fresh sample", 1: "I2C setup failed",
+                          2: "Reset write failed · communication not established",
+                          3: "Sensor setup failed", 4: "Invalid output data rate",
+                          5: "Status read failed", 6: "Sample read failed"}.get(code, "Bosch initialization failed")
+                self.bmp_health_var.set("healthy" if valid else f"{reason} · code {code}")
 
         elif tag == "SD_DBG" and len(parts) > 2:
             kv = self._kv(parts[3:])
@@ -599,6 +680,22 @@ class MonitorApp:
             self.out_var.set(f"ail {o[0]}/{o[1]}  elev {o[2]}/{o[3]}  "
                              f"rud {o[4]}  nose {o[5]}  esc {o[6]}/{o[7]}")
 
+        elif tag == "GPS_HEALTH":
+            kv = self._kv(parts[1:])
+            try:
+                health = {key: int(kv[key]) for key in ("rx", "nmea", "fix", "used", "visible", "baud")}
+            except (KeyError, ValueError):
+                return
+            if (health["rx"] not in (0, 1) or health["nmea"] not in (0, 1)
+                    or health["visible"] not in (-1, 0, 1) or not -1 <= health["used"] <= 99
+                    or not 0 <= health["fix"] <= 8 or health["baud"] <= 0):
+                return
+            self._gps_health = health
+            self._last_gps_health = time.time()
+            if not health["nmea"] or not health["fix"]:
+                self._last_gps = 0
+            self._expire_sensor_data(time.time())
+
         elif tag == "GPS" and len(parts) == 8:
             try:
                 lat = float(parts[1])
@@ -614,6 +711,7 @@ class MonitorApp:
                 self._last_gps = 0
                 self._expire_sensor_data(time.time())
                 return
+            self._last_gps_message = time.time()
             self._last_gps = time.time()
             self.pos_var.set(f"{lat:.6f}, {lon:.6f}")
             self.gps_alt_var.set(f"{alt:.1f} m")
@@ -630,16 +728,26 @@ class MonitorApp:
                 spd = float(parts[4])
             except ValueError:
                 return
+            if not math.isfinite(spd) or not 0 <= sats <= 99 or not 0 <= fix <= 8:
+                return
+            self._last_gps_message = time.time()
+            if fix == 0:
+                self._last_gps = 0
             self.sats_var.set(str(sats))
             self.fix_var.set(self._fix_label(fix))
             self.gps_time_var.set(t)
             self.gps_speed_var.set(f"{spd:.1f} km/h")
+            self._update_gps_status(time.time())
 
         elif tag == "IMU_HEALTH" and len(parts) == 6:
             h0, h1, active, ambiguous, valid = parts[1:]
-            self.status_var.set(f"{getattr(self, 'imu_model', 'IMU')} {h0}/{h1}  active #{int(active)+1}" +
+            if any(v not in ("0", "1") for v in (h0, h1, active, ambiguous, valid)):
+                return
+            self._last_imu_health = time.time()
+            health = lambda h: "OK" if h == "1" else "unavailable"
+            self.status_var.set(f"{getattr(self, 'imu_model', 'IMU')} · #1 {health(h0)} · #2 {health(h1)} · active #{int(active)+1}" +
                                 ("  DISAGREE" if ambiguous == "1" else ""))
-            self.status_lbl.configure(fg=self.green if valid == "1" else self.red)
+            self.status_lbl.configure(fg=(self.green if h0 == h1 == "1" else self.amber) if valid == "1" else self.red)
             if valid != "1":
                 self._last_att = 0
                 self._expire_sensor_data(time.time())

@@ -21,6 +21,10 @@ uint32_t fix_sequence(); // increments on a newly timed valid GGA fix
 uint32_t current_baud();
 bool locked();
 bool nmea_valid();
+bool receiving(); // Recent UART bytes, including malformed/non-NMEA traffic.
+int satellites_used(); // Fresh GGA count even without a fix; -1 if unknown.
+int satellites_visible(); // Fresh GSV: -1 unknown, 0 none reported, 1 in view.
+uint32_t valid_messages();
 const char* last_nmea();
 uint16_t boot_capture(const uint8_t*& data);
 }

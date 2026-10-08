@@ -31,15 +31,15 @@ These checks cannot prove that an aircraft has landed. The operator must only re
 
 ## Select, program and verify
 
-The assembled board uses **two BMI323s, no magnetometer**, with default motor inhibition:
+The current Raspberry Pi-connected card was identified by the user on 2026-10-08 as **BMI270**. Use the default `v2_bmi270` profile, which preserves disabled magnetometer support and motor inhibition. BMI270 is the only supported IMU configuration.
 
 ```text
-pio run -e v2_bmi323
+pio run -e v2_bmi270
 dfu-util -l
-dfu-util -d 0483:df11 -a 0 -s 0x08000000:leave -D .pio/build/v2_bmi323/firmware.bin
+dfu-util -d 0483:df11 -a 0 -s 0x08000000:leave -D .pio/build/v2_bmi270/firmware.bin
 ```
 
-The installed PlatformIO dfu-util may need its full executable path on Windows. For multiple devices, select the intended ROM serial with `-S SERIAL`. This board's ROM serial is `3154365B3034`; normal v3 CDC currently uses COM6 and the same serial. The earlier 0.3.1 sensor console used COM5 and a different USB serial descriptor.
+The installed PlatformIO dfu-util may need its full executable path on Windows. For multiple devices, select the intended ROM serial with `-S SERIAL`. This board's ROM serial is `3154365B3034`; normal v3 CDC uses the same serial and currently enumerates as `/dev/ttyACM0` on the Raspberry Pi. Windows assigns its own COM number.
 
 For a full backup **before an update**, use a new output filename:
 
@@ -61,6 +61,6 @@ Allow several seconds for CDC to return. If it does not, press RESET with BOOT r
 
 `src/hal/stm32/bootloader.cpp` stores a magic value plus its complement, clears old reset flags, and issues a system reset. `ld/stm32f407vg.ld` reserves eight NOLOAD bytes at `0x2001FFF8` and moves the stack top below that mailbox. The early `.preinit_array` hook consumes the marker before Arduino initializes clocks, USB, timers or the watchdog. Only a matching marker plus a software reset is accepted; power, brownout and watchdog resets boot the application. ROM vectors at `0x1FFF0000` are remapped, then MSP and the reset entry are loaded together in assembly.
 
-This replaces the former direct jump with an already-running watchdog. The linked map and assembly were inspected, and **CDC → ROM DFU → CDC was verified on this physical board on 2026-10-02**, after the application watchdog was running. The GUI button also passed this test; **Reconnect** resumed monitoring afterward. The original 1 MiB flash was backed up and the first v3 upload verified byte-for-byte. See [assembled-board results](ASSEMBLED_BOARD.md) for sensor/runtime results and remaining acceptance work.
+The early reset path avoids jumping into ROM with the application watchdog already running. **CDC → ROM DFU → CDC and programmed-payload readback were verified on the current BMI270 card on 2026-10-08.** The original 1 MiB flash was backed up before updating. See [assembled-board results](ASSEMBLED_BOARD.md) for sensor/runtime observations.
 
 References: [ST AN2606 system-memory bootloader](https://www.st.com/resource/en/application_note/cd00167594-stm32-microcontroller-system-memory-boot-mode-stmicroelectronics.pdf), [dfu-util manual](https://dfu-util.sourceforge.net/dfu-util.1.html). The supplied FlightController 0.3.1 project's command and reset-marker approach were inspected as a reference; its build scripts and binaries were not executed.

@@ -23,7 +23,7 @@ import zipfile
 REPO = Path(__file__).resolve().parents[1]
 ASSETS = REPO / "build/gui-assets"
 DOWNLOADS = REPO / "build/gui-downloads"
-RELEASE = "2026.10.05"
+RELEASE = "2026.10.08"
 # Original publisher archives, including the exact libusb revision documented
 # in dfu-util's README-bin.txt (not the older libusb 1.0.24 release tarball).
 ARCHIVES = {
@@ -106,7 +106,8 @@ def prepare():
                      REPO / "tests/dfu_helper.py"]:
             if path.is_file():
                 z.write(path, path.relative_to(REPO))
-    info = {"release": RELEASE, "platform": "Windows x64", "python": platform.python_version(),
+    info = {"release": RELEASE, "source_commit": subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip(), "platform": "Windows x64", "python": platform.python_version(),
             "packages": {p: metadata.version(p) for p in ("pyinstaller", "pyinstaller-hooks-contrib", "pyserial")},
             "vendor_archives": {n: {"url": u, "sha256": h} for n, (u, h) in ARCHIVES.items()},
             "vendor_files": {p.name: sha256(p) for p in vendor.iterdir()},

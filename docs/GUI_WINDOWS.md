@@ -1,6 +1,6 @@
 # STM32FC GUI for Windows
 
-Release **2026.10.05**, for **Windows 10/11 on x64 (Intel/AMD)**.
+Release **2026.10.08**, for **Windows 10/11 on x64 (Intel/AMD)**.
 
 Double-click **STM32FC-GUI.exe**. Python, Tcl/Tk, pySerial, dfu-util and libusb
 are included. No Python, pip, PlatformIO, internet connection or administrator
@@ -30,6 +30,24 @@ sensor firmware requires the matching v3 firmware before this GUI can display
 its data. A missing sensor/GPS fix/receiver is a board or signal status, not a
 missing PC dependency. Yaw is relative on the assembled board without a
 magnetometer.
+
+## Sensor diagnostics
+
+- BMI270 #1 and #2 each show a driver stage. Code 103 means the chip ID did not
+  match 0x24; code 109 means the 8192-byte configuration image failed to load.
+  The header identifies healthy sensors and the selected source. Raw accel/gyro
+  values are from the selected IMU. One usable IMU is shown in amber because
+  redundancy is unavailable.
+- BMP581 reports whether initialization, register access or sample reads failed.
+  A failed reset write means communication has not been established; it does
+  not determine whether the underlying cause is a NACK or timeout.
+- GNSS **Communication OK** requires recent checksum-valid NMEA sentences.
+  **No GNSS data received** and **Bytes received · no valid NMEA** are distinct.
+  With communication working, the fix row distinguishes no satellites reported
+  in view, satellites in view without a fix, and unknown satellite visibility.
+  **Satellites used** is the fresh GGA count, including zero without a fix.
+- Lost controller telemetry expires health/status displays instead of leaving
+  old green statuses visible. The raw diagnostic table remains a last-value log.
 
 ## DFU and USB drivers
 
@@ -76,7 +94,7 @@ build script fetches official archives, checks pinned SHA256 hashes, includes
 licenses and corresponding DFU/libusb source, and writes:
 
 - `dist/STM32FC-GUI.exe` — standalone, windowed application.
-- `dist/STM32FC-GUI-2026.10.05-Windows-x64.zip` — EXE, quick start, checksums,
+- `dist/STM32FC-GUI-2026.10.08-Windows-x64.zip` — EXE, quick start, checksums,
   build metadata, third-party notices and source archives.
 - `dist/STM32FC-GUI.exe.sha256` — integrity checksum.
 
@@ -84,6 +102,10 @@ The optional folder build is under `build/gui-onedir/STM32FC-GUI/`. Downloads
 are cached under `build/gui-downloads/`. Release version fields live in
 `tools/build_gui.py` and `tools/gui-version.txt`. The build recipe is repeatable;
 byte-identical EXEs across different build machines are not promised.
+
+The repository also includes `.github/workflows/build-gui.yml`, which builds on
+Windows x64, tests the source and packaged application, and uploads the EXE,
+portable ZIP, checksums and smoke-test report as a workflow artifact.
 
 ## Validation
 

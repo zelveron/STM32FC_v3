@@ -1,12 +1,7 @@
 #include "imu_v2.hpp"
 #include "../config/airframe.hpp"
-#if FC_IMU_BMI323
-#include "bmi323_fifo.hpp"
-namespace sensor = imu323;
-#else
 #include "bmi270.hpp"
 namespace sensor = imu270;
-#endif
 #include "../core/imu_selection.hpp"
 #include "../estimation/imu_rotation.hpp"
 #include "../estimation/ahrs.hpp"
@@ -93,17 +88,9 @@ bool ambiguous() { return selection.ambiguous(); }
 unsigned active() { return selection.active(); }
 const estimation::ImuSample& latest() { return sample[selection.active()]; }
 int driver_error(unsigned i) {
-#if FC_IMU_BMI323
     return i<2 ? device[i].error() : -1;
-#else
-    return i<2 && ready[i] ? 0 : -1;
-#endif
 }
 uint32_t driver_health_registers(unsigned i) {
-#if FC_IMU_BMI323
     return i<2 ? device[i].health_registers() : 0;
-#else
-    (void)i; return 0;
-#endif
 }
 }

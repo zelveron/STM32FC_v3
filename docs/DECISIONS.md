@@ -516,3 +516,13 @@ TELEMETRY.md inventories both radio directions and receiver-generated statistics
 All three ARM profiles build; 274 C/C++ and 17 Python checks pass. These are
 implementation/model results, not evidence of an actual flight or airframe tune.
 No board was flashed; motor inhibition remains the default development gate.
+
+
+**2026-10-08 — BMI270-only firmware and Windows GUI.** The connected card is
+identified by the user as dual BMI270. Remove the former BMI323 drivers, vendor
+library and build profile; historical entries above describe superseded work.
+Default to `v2_bmi270` with magnetometer disabled and motors inhibited. Upload
+Bosch's configuration image independently on each SPI bus, allow measurement
+startup to settle, then flush the FIFO before accepting paired samples. Expose
+per-device initialization errors and persistent GNSS communication/satellite
+health in USB telemetry and the standalone Windows x64 dashboard.

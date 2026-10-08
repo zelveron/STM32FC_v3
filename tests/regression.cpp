@@ -241,6 +241,24 @@ int main() {
     check("CRSF drain has a finite byte budget",rx[1].size()==10000-384);rx[1].clear();
 
     ublox::begin(38400);
+    check("silent GNSS is distinct from an unlocked receiver",!ublox::receiving()&&!ublox::nmea_valid()&&ublox::satellites_used()==-1&&ublox::satellites_visible()==-1);
+    rx[(int)hal::Uart::gps].push_back('x');ublox::poll();
+    check("UART bytes alone do not prove valid GNSS communication",ublox::receiving()&&!ublox::nmea_valid()&&ublox::valid_messages()==0);
+    nmea("GNGGA,120000.00,,,,,0,00,99.99,,,,,,");
+    check("no-fix GGA proves communication and preserves zero used satellites",ublox::nmea_valid()&&!ublox::locked()&&ublox::satellites_used()==0&&ublox::valid_messages()==1);
+    nmea("GPGSV,1,1,00");
+    check("empty GSV reports no satellites without marking link down",ublox::nmea_valid()&&ublox::satellites_visible()==0);
+    nmea("GPGSV,1,1,02,01,20,100,25,02,30,200,28");
+    nmea("GLGSV,1,1,00");
+    check("one constellation with satellites survives another empty constellation",ublox::satellites_visible()==1&&!ublox::locked());
+    nmea("GNGGA,120000.00,,,,,0,03,99.99,,,,,,");
+    check("satellite count remains visible without navigable coordinates",ublox::satellites_used()==3&&!ublox::locked());
+    now_us+=2100000;
+    check("GNSS UART and GGA freshness expire independently of stored counters",!ublox::receiving()&&!ublox::nmea_valid()&&ublox::satellites_used()==-1&&ublox::rx_bytes()>0);
+    now_us+=3000000;nmea("GLGSV,1,1,00");
+    check("old positive satellite detection expires",ublox::satellites_visible()==0);
+    ublox::begin(38400);
+    check("GNSS restart resets diagnostic state",ublox::valid_messages()==0&&!ublox::receiving()&&ublox::satellites_visible()==-1);
     nmea("GNGGA,120000.00,4101.12345,N,02901.54321,E,1,12,0.8,123.4,M,0,M,,");
     nmea("GNRMC,120000.00,A,4101.12345,N,02901.54321,E,20.0,123.4,280926,,,A");
     check("SAM-M10Q NMEA yields valid fix/speed/course",ublox::locked()&&ublox::speed_valid()&&std::fabs(ublox::course_deg()-123.4f)<.01);

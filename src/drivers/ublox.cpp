@@ -11,6 +11,9 @@ uint32_t baud_now=38400, baud_since=0, message_ms=0, fix_ms=0, speed_ms=0;
 unsigned baud_index=0;
 bool have_message=false, have_fix=false, have_speed=false, collecting=false;
 uint32_t bytes=0,fix_seq=0;
+uint32_t rx_ms=0,gga_ms=0,gsv_ms=0,visible_ms=0,messages=0;
+bool have_rx=false,have_gga=false,have_gsv=false,have_visible=false;
+int used_satellites=0;
 char fix_utc[16]{};
 uint8_t boot[160]{};
 uint16_t boot_len=0;
@@ -49,7 +52,7 @@ uint8_t parse() {
     uint8_t sum=0;
     for(size_t i=1;i<length-3;++i) sum^=uint8_t(line[i]);
     if(sum!=(a*16+b)) return EV_NONE;
-    have_message=true; message_ms=hal::millis(); std::strcpy(last_line,line);
+    have_message=true; message_ms=hal::millis(); ++messages; std::strcpy(last_line,line);
     line[length-3]=0;
     char* f[20]; unsigned n=1; f[0]=line;
     for(char* p=line;*p&&n<20;++p) if(*p==',') { *p=0; f[n++]=p+1; }
@@ -65,8 +68,12 @@ uint8_t parse() {
         have_fix=false;
         if(n<11) return EV_NONE;
         double q,sat,alt,lat,lon;
-        if(!number(f[6],q)||!number(f[7],sat)) return EV_GGA;
-        if(!(q==1||q==2||q==4||q==5)||sat<4||sat>99||
+        have_gga=false;
+        if(!number(f[6],q)||!number(f[7],sat)||q<0||q>8||q!=std::floor(q)||
+           sat<0||sat>99||sat!=std::floor(sat)) return EV_GGA;
+        used_satellites=int(sat); gga_ms=hal::millis(); have_gga=true;
+        time_field(f[1]);
+        if(!(q==1||q==2||q==4||q==5)||sat<4||
            !coordinate(f[2],f[3],true,lat)||!coordinate(f[4],f[5],false,lon)||
            !number(f[9],alt)||alt<-1000||alt>50000||std::strcmp(f[10],"M")) return EV_GGA;
         quality=int(q); satellites=int(sat); latitude=lat; longitude=lon; altitude=float(alt);
@@ -75,16 +82,30 @@ uint8_t parse() {
         }
         time_field(f[1]); fix_ms=hal::millis(); have_fix=true;
         return EV_GGA|EV_FIX;
+    } else if(!std::strcmp(f[0]+3,"GSV")) {
+        double total,index,visible;
+        if(n<4||!number(f[1],total)||!number(f[2],index)||!number(f[3],visible)||
+           total<1||total>99||index<1||index>total||visible<0||visible>99||
+           total!=std::floor(total)||index!=std::floor(index)||visible!=std::floor(visible)) return EV_NONE;
+        have_gsv=true; gsv_ms=hal::millis();
+        // GSV arrives separately per constellation/signal. A zero from one
+        // group must not erase another group's recent satellite detection.
+        if(visible>0) { have_visible=true; visible_ms=gsv_ms; }
     }
     return EV_NONE;
 }
-void capture(uint8_t c) { ++bytes; if(boot_len<sizeof(boot)) boot[boot_len++]=c; }
+void capture(uint8_t c) {
+    ++bytes; have_rx=true; rx_ms=hal::millis();
+    if(boot_len<sizeof(boot)) boot[boot_len++]=c;
+}
 }
 void begin(uint32_t baud) {
     baud_now=baud; baud_index=0;
     for(unsigned i=0;i<sizeof(kBauds)/sizeof(kBauds[0]);++i) if(kBauds[i]==baud) baud_index=i;
     baud_since=hal::millis(); have_message=have_fix=have_speed=false;
     length=0; collecting=false; bytes=boot_len=0; utc[0]=last_line[0]=0; fix_seq=0; fix_utc[0]=0;
+    have_rx=have_gga=have_gsv=have_visible=false; messages=0; used_satellites=0;
+    quality=satellites=0;
     hal::uart_config(kPort,baud);
 }
 void drain_rx() {
@@ -109,6 +130,7 @@ uint8_t poll() {
     if((!have_message||uint32_t(now-message_ms)>=5000)&&uint32_t(now-baud_since)>=2500) {
         baud_index=(baud_index+1)%(sizeof(kBauds)/sizeof(kBauds[0])); baud_now=kBauds[baud_index];
         hal::uart_config(kPort,baud_now); baud_since=now; have_message=have_fix=have_speed=false;
+        have_gga=have_gsv=have_visible=false;
         length=0; collecting=false;
     }
     return events;
@@ -127,6 +149,14 @@ uint32_t rx_bytes() { return bytes; }
 uint32_t fix_sequence() { return fix_seq; }
 uint32_t current_baud() { return baud_now; }
 bool nmea_valid() { return fresh(have_message,message_ms); }
+bool receiving() { return fresh(have_rx,rx_ms); }
+int satellites_used() { return fresh(have_gga,gga_ms)?used_satellites:-1; }
+int satellites_visible() {
+    const uint32_t now=hal::millis();
+    if(!have_gsv||uint32_t(now-gsv_ms)>=5000) return -1;
+    return have_visible && uint32_t(now-visible_ms)<5000?1:0;
+}
+uint32_t valid_messages() { return messages; }
 const char* last_nmea() { return last_line; }
 uint16_t boot_capture(const uint8_t*& data) { data=boot; return boot_len; }
 }

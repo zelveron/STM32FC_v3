@@ -3,14 +3,10 @@
 #include "../control/command_shape.hpp"
 #include "../core/telemetry_schedule.hpp"
 namespace config {
-#ifndef FC_IMU_BMI323
-#define FC_IMU_BMI323 0
-#endif
 #ifndef FC_MAG_ENABLED
 #define FC_MAG_ENABLED 1
 #endif
-constexpr bool imu_bmi323 = FC_IMU_BMI323 != 0;
-constexpr const char* imu_model = imu_bmi323 ? "BMI323" : "BMI270";
+constexpr const char* imu_model = "BMI270";
 constexpr bool enable_magnetometer = FC_MAG_ENABLED != 0;
 constexpr control::AssistTuning assist_tuning{};
 constexpr core::TelemConfig telemetry{}; // per-type enable/interval and CRSF byte budget

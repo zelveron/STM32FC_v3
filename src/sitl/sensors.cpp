@@ -10,7 +10,7 @@ Sensors synth(const State& s, double home_lat, double home_lon)
     constexpr double r2d = 57.29577951308232;
 
     // Model accel_body is specific force with gravity removed and z DOWN; the
-    // real BMI323 reads az = +1 g when level, ax negative for nose-up. Negate.
+    // The body-axis accelerometer reads az = +1 g level, ax negative nose-up. Negate.
     o.ax_g = (float)(-s.accel_body.x / g);
     o.ay_g = (float)(-s.accel_body.y / g);
     o.az_g = (float)(-s.accel_body.z / g);

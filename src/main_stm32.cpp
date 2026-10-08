@@ -533,6 +533,15 @@ void task_debug()   // 2 Hz -- low-rate status lines (no blocking calls here)
         L().print(F(",regs1=")); L().println(imu_v2::driver_health_registers(1),HEX);
         L().print(F("BMP_HEALTH,valid=")); L().print(bmp581::healthy()?1:0);
         L().print(F(",error=")); L().println(bmp581::error());
+        // Continuous health even with no fix/no receiver and for late GUI joins.
+        L().print(F("GPS_HEALTH,rx=")); L().print(ublox::receiving()?1:0);
+        L().print(F(",nmea=")); L().print(ublox::nmea_valid()?1:0);
+        L().print(F(",fix=")); L().print(ublox::fix());
+        L().print(F(",used=")); L().print(ublox::satellites_used());
+        L().print(F(",visible=")); L().print(ublox::satellites_visible());
+        L().print(F(",baud=")); L().print(ublox::current_baud());
+        L().print(F(",bytes=")); L().print(ublox::rx_bytes());
+        L().print(F(",messages=")); L().println(ublox::valid_messages());
         float bx, by, bz; ahrs::gyro_bias_dps(bx, by, bz);
         L().print(F("IMU_HEALTH,")); L().print(imu_v2::sensor_healthy(0)); L().print(',');
         L().print(imu_v2::sensor_healthy(1)); L().print(','); L().print(imu_v2::active()); L().print(','); L().print(imu_v2::ambiguous());

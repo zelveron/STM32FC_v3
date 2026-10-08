@@ -4,22 +4,30 @@ Custom flight-controller firmware for RC fixed-wing aircraft, targeting the **ma
 
 **v3 is the software repository generation; v2.2 is the PCB revision.** PlatformIO profiles retain their `v2` names to identify that board. This project continues [STM32FC_v2](https://github.com/zelveron/STM32FC_v2); older board instructions are archived in [docs/history](docs/history/README-v1.md).
 
-> **Development status — 2026-10-02:** the assembled BMI323 board has been flashed and readback-verified; software DFU, both IMUs and BMP581 have been checked on the bench. RC, GNSS fix, real-card logging, actuator directions and flight behavior remain unqualified. The default build inhibits both motors. Electrical findings in the supplied PCB design require inspection and correction before powered testing. Direct 6S operation exceeds the fitted regulator's recommended input range.
+> **Development status — 2026-10-08:** BMI270-only firmware; the current USB-powered card has been flashed and readback-verified. IMU 1 produces calibrated data. IMU 2 still fails identification, and BMP581 fails its initial reset write. GNSS communicates but had no position fix during this session. Both motors remain inhibited. See [current bench results](docs/ASSEMBLED_BOARD.md).
 
-## Assembled-board update — 2026-10-02
+## Current card — 2026-10-08
 
-The connected board reports **two BMI323s (chip ID 0x43), not BMI270s**, and the user confirmed that **no magnetometer is assembled**. Use the new default **`v2_bmi323`** profile for this board. It retains motor inhibition, selects the paired 400 Hz BMI323 FIFO driver and disables BMM350 initialization/polling. The earlier `v2` / `v2_motor_test` profiles remain specifically for the planned BMI270/BMM350 assembly and must not be flashed to this board.
+The user identified the card connected to the Raspberry Pi as the **BMI270** assembly. The default environment in this checkout is now **`v2_bmi270`**, using the existing dual-BMI270 driver. It preserves the previous profile's disabled magnetometer and motor inhibition (`FC_MAG_ENABLED=0`, `FC_FLIGHT_ENABLED=0`). Build with `pio run` or `pio run -e v2_bmi270`. BMI270 is the only supported IMU; the legacy driver, vendor library and build profile have been removed.
 
-USB maintenance now supports `dfu` and the GUI **Enter DFU** button; see [DFU instructions](docs/DFU.md). The GUI includes an **All live parameters** diagnostic table.
+The BMI270 path runs Bosch's reset/SPI-selection sequence and uploads all 8192 configuration bytes independently to each IMU. Initialization uses 1 MHz SPI, then waits 80 ms after enabling measurement before switching to 5 MHz FIFO service and flushing startup frames. This covers the gyroscope's documented 45 ms startup; without settling, dummy FIFO frames can latch the strict paired-frame parser as failed. See the [Bosch BMI270 datasheet](https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmi270-ds000.pdf), sections 1 and 4.4. Runtime FIFO, freshness, clipping and failover checks remain active.
 
-**Windows GUI:** [download the standalone EXE](https://github.com/zelveron/STM32FC_v3/releases/download/gui-2026.10.05/STM32FC-GUI.exe) or the [portable ZIP with documentation, licenses and sources](https://github.com/zelveron/STM32FC_v3/releases/download/gui-2026.10.05/STM32FC-GUI-2026.10.05-Windows-x64.zip), then double-click `STM32FC-GUI.exe`. Python, serial support and the DFU utility are bundled. It supports automatic USB detection and a COM-port selector. See the [portable GUI guide and build instructions](docs/GUI_WINDOWS.md). Windows USB drivers remain an OS requirement; binaries are distributed through [GitHub Releases](https://github.com/zelveron/STM32FC_v3/releases/tag/gui-2026.10.05) and are not checked into Git.
+`IMU_CONFIG` now reports actual BMI270 failure stages and register snapshots: `regsN = CHIP_ID << 16 | INTERNAL_STATUS << 8 | ERR_REG` (hexadecimal, normally `240100`). Initialization errors are `100 - Bosch return code`: `103` means chip ID mismatch and `109` means configuration-load failure. Other codes: 1 SPI setup, 2 power-save setup, 3 configuration read, 4 sensor configuration/enable, 5 FIFO setup, 6 flush, 7 identity/health, 8 FIFO length/backlog, 9 sensor clock, 10 FIFO transfer, 11 paired-frame parsing, 12 clipping. The October 8 software correction restored IMU 1 readings and calibration; IMU 2 still returned chip ID `0x00` instead of `0x24` during the observed session.
 
-The user confirmed that the documented electrical corrections were checked and that motors/servos were safe for bench work. That confirmation is not a set of measured electrical test results. See [assembled-board bring-up](docs/ASSEMBLED_BOARD.md) for the current driver, GUI, test evidence and physical bring-up status. The 2026-09-28 results below describe the earlier BMI270 target; they do not establish physical validation of this assembly.
+The GUI now separates GNSS communication from navigation status. Firmware emits `GPS_HEALTH` every second, including after the initial bring-up period: `rx` (recent UART bytes), `nmea` (recent checksum-valid sentences), `fix`, `used` (fresh GGA satellites used, `-1` unknown), `visible` (fresh GSV: `-1` unknown, `0` none reported, `1` satellites in view), `baud`, cumulative `bytes` and `messages`. A missing fix no longer hides receiver communication or GGA satellite counts. Positive GSV evidence is retained for five seconds so an empty report from another constellation cannot immediately erase it. Stale controller telemetry is displayed separately from a silent GNSS receiver.
+
+## Windows GUI
+
+Download the [standalone Windows x64 EXE](https://github.com/zelveron/STM32FC_v3/releases/download/gui-2026.10.08/STM32FC-GUI.exe) from [GitHub Releases](https://github.com/zelveron/STM32FC_v3/releases). Python, serial support and DFU utilities are bundled. The GUI shows individual BMI270 failure stages and distinguishes missing GNSS communication from no satellites/no position fix. See the [Windows guide](docs/GUI_WINDOWS.md) for connection, driver requirements and reproducible packaging.
+
+For source-based use:
 
 ```text
-pio run -e v2_bmi323
-python tools/gui.py --port COM6 --capture bench-session.txt
+pio run -e v2_bmi270
+python tools/gui.py --port /dev/ttyACM0 --capture bench-session.txt
 ```
+
+On Windows use the appropriate COM port instead. The GUI includes **Enter DFU** and an **All live parameters** diagnostic table; see [DFU instructions](docs/DFU.md).
 
 ## Contents
 
@@ -240,7 +248,7 @@ Install Git and PlatformIO Core, then clone with an account that has repository 
 ```text
 git clone https://github.com/zelveron/STM32FC_v3.git
 cd STM32FC_v3
-pio run -e v2
+pio run -e v2_bmi270
 pio run -e crsf_probe
 ```
 
@@ -248,8 +256,8 @@ pio run -e crsf_probe
 
 | Environment | Purpose | Result |
 |---|---|---|
-| `v2_bmi323` (default) | Assembled dual BMI323, no magnetometer | Motor-inhibited bench firmware; `.pio/build/v2_bmi323/firmware.bin` |
-| `v2` (BMI270 assembly) | Sensor, surface, radio and logging development | `.pio/build/v2/firmware.bin`; `FC_FLIGHT_ENABLED=0`, both ESCs at minimum |
+| `v2_bmi270` (default) | Current dual-BMI270 card, magnetometer disabled | Motor-inhibited bench firmware; `.pio/build/v2_bmi270/firmware.bin` |
+| `v2` (optional BMM350) | BMI270 development with magnetometer support enabled | `.pio/build/v2/firmware.bin`; `FC_FLIGHT_ENABLED=0`, both ESCs at minimum |
 | `v2_motor_test` | Explicit motor-enabled qualification | `FC_FLIGHT_ENABLED=1`; select only after electrical/motor-disabled checks |
 | `crsf_probe` | Independent UART4/USB diagnostic | Isolates receiver wiring/protocol issues |
 | `native` | Portable module checks | Host executable |
@@ -261,7 +269,7 @@ After electrical repairs and propeller-off acceptance checks, the separate motor
 pio run -e v2_motor_test
 ```
 
-The flag enables software authorization, not flight readiness. The configured upload protocol is DFU. Building does not flash anything. The assembled BMI323 board was flashed and readback-verified on 2026-10-02; see [bring-up evidence](docs/ASSEMBLED_BOARD.md).
+The flag enables software authorization, not flight readiness. The configured upload protocol is DFU. Building does not flash anything. The current BMI270 card was flashed and readback-verified on 2026-10-08; see [bring-up evidence](docs/ASSEMBLED_BOARD.md).
 
 Configuration is compile-time:
 
@@ -367,4 +375,4 @@ docs/           Guides, evidence, validation captures and history
 
 ## Third-party code and licensing
 
-Vendor notices are retained. BMI270 and BMM350 include licenses and pinned provenance in `lib/*/UPSTREAM.md`; BMP5, FatFs, STM32SD and historical BMI323 retain their existing notices. STM32SD includes GPLv3-marked source. This repository assigns no new blanket license to those components or the original project; a project-wide licensing decision is still outstanding. Historical BMI323 code is excluded from the v2.2 production builds.
+Vendor notices are retained. BMI270 and BMM350 include licenses and pinned provenance in `lib/*/UPSTREAM.md`; BMP5, FatFs and STM32SD retain their existing notices. STM32SD includes GPLv3-marked source. This repository assigns no new blanket license to those components or the original project; a project-wide licensing decision is still outstanding.

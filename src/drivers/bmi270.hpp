@@ -10,6 +10,9 @@ public:
     // Startup only: discard samples accumulated during other devices' init.
     bool discard_pending();
     uint32_t sensor_time() const { return _sensor_time; }
+    int error() const { return _error; }
+    // CHIP_ID << 16 | INTERNAL_STATUS << 8 | ERR_REG; captured at init/read.
+    uint32_t health_registers() const { return _health_registers; }
     // Every FIFO sample is returned, oldest first, at 400 Hz. Backlogs over
     // 20 ms are faults, never silently decimated or treated as fresh data.
     Result read(Sample (&samples)[8],uint8_t& count);
@@ -17,10 +20,14 @@ private:
     static int8_t read_reg(uint8_t,uint8_t*,uint32_t,void*);
     static int8_t write_reg(uint8_t,const uint8_t*,uint32_t,void*);
     static void delay(uint32_t,void*);
+    bool capture_health();
+    bool fail(int code) { _error=code; _ready=false; return false; }
     bmi2_dev _dev{};
     hal::SpiBus _bus=hal::SpiBus::imu;
     hal::PinId _cs=0;
     uint32_t _sensor_time=0;
+    uint32_t _health_registers=0;
+    int _error=0;
     bool _ready=false, _have_time=false;
 };
 }

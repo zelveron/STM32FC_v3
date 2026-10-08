@@ -2,7 +2,7 @@
 
 Current behavior and hardware are documented in README.md and docs/HARDWARE_V2.md. The user authorized the v2 hardware migration; historical v1 constraints are archived in docs/history/CLAUDE-v1.md and do not define the new board.
 
-Assembly correction confirmed 2026-10-02: the physical board uses TWO BMI323s and NO magnetometer. The default `v2_bmi323` profile selects that assembly; `v2` remains the separate planned BMI270 target. See docs/ASSEMBLED_BOARD.md and do not confuse the profiles.
+Current card confirmed 2026-10-08: dual BMI270 is the only supported IMU configuration. The default `v2_bmi270` profile disables the magnetometer and inhibits both motors. The optional `v2` profile enables BMM350 support. Current bench evidence is in docs/ASSEMBLED_BOARD.md; do not substitute older assembly results.
 
 Use the supplied v2.2 KiCad pin map: F407VG, dual BMI270, BMP581, BMM350, SAM-M10Q, UART4/J2 for ER8. Preserve the user's choice of automatic throttle restoration after stable RC recovery. Clearly distinguish implementation, host simulation, hardware tests and flight qualification.
 
