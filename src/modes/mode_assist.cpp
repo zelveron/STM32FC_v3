@@ -55,9 +55,9 @@ void ModeAssist::update(const ModeInput& in, control::Outputs& out)
     const float yc_applied=bound(yc*scale,-_tuning.yaw_damper_limit,_tuning.yaw_damper_limit)*(1-std::fabs(yaw));
     control::mix_manual({rc*scale,pc*scale,yaw+yc_applied,in.sticks.throttle},mix,out);
     _transition.apply(out,in.dt_s);
-    const float ar=std::fabs(mix.aileron_gain)>1e-6f?out.ch[0]/mix.aileron_gain/scale:0;
-    const float ap=std::fabs(mix.elevator_gain)>1e-6f?out.ch[2]/mix.elevator_gain/scale:0;
-    const float ay=std::fabs(mix.rudder_gain)>1e-6f?(out.ch[4]/mix.rudder_gain-yaw)/scale:0;
+    const float ar=std::fabs(mix.aileron_gain)>1e-6f?out.ch[control::kRollOutput]/mix.aileron_gain/scale:0;
+    const float ap=std::fabs(mix.elevator_gain)>1e-6f?out.ch[control::kPitchOutput]/mix.elevator_gain/scale:0;
+    const float ay=std::fabs(mix.rudder_gain)>1e-6f?(out.ch[control::kYawOutput]/mix.rudder_gain-yaw)/scale:0;
     _rate.track_applied(rc,pc,yc,ar,ap,ay);
 }
 } // namespace modes

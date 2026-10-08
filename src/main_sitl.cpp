@@ -168,10 +168,10 @@ int main(int argc, char** argv)
         control::Outputs o;
         mode->update(mi, o);
         sitl::Controls u {
-            o.ch[0],                          // aileron  (both sides same)
-            o.ch[2] + de_trim,                // elevator + airframe trim
-            o.ch[4],                          // rudder
-            0.5 * (o.ch[6] + o.ch[7]),        // throttle (mean of the two ESCs)
+            o.ch[control::kRollOutput],        // primary aileron
+            o.ch[control::kPitchOutput] + de_trim,                // elevator + airframe trim
+            o.ch[control::kYawOutput],          // rudder
+            o.ch[control::kThrottleOutput],    // SERVO3 throttle
         };
 
         ac.step(u, dt);

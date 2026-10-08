@@ -1,6 +1,8 @@
 # STM32FC Ground Station
 
-Modern desktop revision **2026.10.08-modern**, for **Windows 10/11 x64 (Intel/AMD)**.
+Modern desktop revision **2026.10.08-aetr6**, for **Windows 10/11 x64 (Intel/AMD)**.
+
+This revision labels the current aircraft outputs: SERVO1 aileron, SERVO2 elevator, SERVO3 throttle, SERVO4 rudder and SERVO6 reversed aileron. Use it with the matching AETR6 firmware; the earlier `modern` release used a different mixer.
 
 Double-click **STM32FC-GUI.exe**. Python, Qt 6, PySide6, serial support and the
 DFU utility are bundled. No Python installation, browser, internet connection
@@ -130,7 +132,7 @@ py -3.12 -m venv build\gui-venv
 ```
 
 Outputs are `dist/STM32FC-GUI.exe`, its SHA256 file and
-`dist/STM32FC-GUI-2026.10.08-modern-Windows-x64.zip`. The optional folder build is
+`dist/STM32FC-GUI-2026.10.08-aetr6-Windows-x64.zip`. The optional folder build is
 `build/gui-onedir/STM32FC-GUI/`. The ZIP also includes editable GUI source,
 Qt/PySide/DFU/libusb source archives, notices and a build manifest with the base
 commit, dirty-worktree flag and hashes of all GUI Python modules. Version

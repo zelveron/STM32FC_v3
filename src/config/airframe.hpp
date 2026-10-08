@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include "../control/command_shape.hpp"
+#include "../control/mixer.hpp"
 #include "../core/telemetry_schedule.hpp"
 namespace config {
 #ifndef FC_MAG_ENABLED
@@ -37,7 +38,7 @@ constexpr bool flight_enabled = FC_FLIGHT_ENABLED != 0;
 constexpr uint16_t servo_min[8] = {1000,1000,1000,1000,1000,1000,1000,1000};
 constexpr uint16_t servo_center[8] = {1500,1500,1500,1500,1500,1500,1500,1500};
 constexpr uint16_t servo_max[8] = {2000,2000,2000,2000,2000,2000,2000,2000};
-constexpr bool servo_reverse[8] = {false,false,false,false,false,false,false,false};
+constexpr bool servo_reverse[8] = {false,false,false,false,false,true,false,false};
 // Each entry is the sensor axis feeding body X,Y,Z (FRD): +/-1=X, +/-2=Y,
 // +/-3=Z. Must be a proper rotation, determinant +1. These entries
 // match v2.2: components upward, nose toward decreasing PCB X (Y2 side).
@@ -53,7 +54,8 @@ constexpr bool enable_sd_logging = FC_SD_LOGGING != 0;
 constexpr bool outputs_valid() {
     for(unsigned i=0;i<8;++i) if(servo_min[i]<800 || servo_max[i]>2200 ||
         servo_min[i]>=servo_center[i] || servo_center[i]>=servo_max[i]) return false;
-    return !servo_reverse[6] && !servo_reverse[7];
+    for(unsigned i=0;i<8;++i) if(control::is_motor_output(i) && servo_reverse[i]) return false;
+    return true;
 }
 static_assert(outputs_valid(), "Invalid endpoints or reversed ESC pulse range");
 }

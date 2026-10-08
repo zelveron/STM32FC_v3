@@ -163,7 +163,7 @@ class DashboardView(QMainWindow):
         names=["01  Aileron / roll","02  Elevator / pitch","03  Throttle","04  Rudder / yaw","05  Arm switch","06  Spare","07  Mode switch","08  Spare"]+[f"{i:02}  Unassigned" for i in range(9,17)]
         self.rc_bars=ChannelBars(names); layout.addWidget(self.rc_bars); panels.addWidget(box,1)
         right=QVBoxLayout(); box,layout=card("COMMANDED OUTPUTS", "Sent PWM commands; physical servo motion is not measured")
-        self.out_bars=ChannelBars(["01  Left aileron","02  Right aileron","03  Left elevator","04  Right elevator","05  Rudder","06  Nosewheel","07  ESC 1","08  ESC 2"]); layout.addWidget(self.out_bars); right.addWidget(box)
+        self.out_bars=ChannelBars(["01  Aileron (SERVO1)","02  Elevator (SERVO2)","03  Throttle (SERVO3)","04  Rudder (SERVO4)","05  Spare / center (SERVO5)","06  Aileron reversed (SERVO6)","07  Reserved / idle (SERVO8)","08  Reserved / idle (SERVO9)"]); layout.addWidget(self.out_bars); right.addWidget(box)
         box,layout=card("RADIO DIAGNOSTICS")
         self.radio_detail=label("No receiver statistics",13,MUTED); self.radio_detail.setWordWrap(True); layout.addWidget(self.radio_detail)
         note=label("RF mode is the raw ELRS enumeration. Packet-rate names vary by radio firmware.",11,MUTED); note.setWordWrap(True); layout.addWidget(note); right.addWidget(box); right.addStretch()

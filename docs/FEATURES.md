@@ -4,7 +4,7 @@ This catalog describes the **implemented STM32FC_v3 development firmware for PCB
 
 ## Power-up and startup checks
 
-- **Defined startup outputs:** six surfaces are initialized to their configured centers and both ESC channels to minimum pulse before sensor initialization. There is no automatic servo sweep at calibration completion.
+- **Defined startup outputs:** active surfaces and SERVO5 are initialized to their configured centers; SERVO3 throttle and reserved SERVO8/9 are initialized to minimum pulse before sensor initialization. There is no automatic servo sweep at calibration completion.
 - **No USB-host wait in the flight application:** connecting a computer is not required for startup.
 - **Board-specific power control:** enables the BMP581/GPS supplies and releases GPS reset using the actual v2.2 GPIOs.
 - **Per-device initialization results:** USB reports BMI, BMP and magnetometer initialization. MANUAL does not require an IMU to initialize successfully.
@@ -48,7 +48,7 @@ This catalog describes the **implemented STM32FC_v3 development firmware for PCB
 | CH6 / CH8 | Reserved, unused |
 
 - **Normalized stick ranges and deadband:** configurable RC-channel conversion maps receiver pulse equivalents to normalized commands; centered axes have a small deadband.
-- **Twin-aircraft mixer:** two ailerons, two elevators, rudder, independent nosewheel output and two ESCs.
+- **Current aircraft mixer:** SERVO1 aileron, SERVO2 elevator, SERVO3 throttle, SERVO4 rudder, SERVO6 reversed aileron. SERVO5 is centered; SERVO8/9 remain at idle.
 - **Per-output endpoints/center/reversal:** mechanical installation can be corrected without changing the IMU frame or pilot control convention.
 - **Motor range validation:** reversed ESC pulse ranges and invalid endpoint ordering fail a compile-time configuration check.
 - **Differential-thrust scaffolding:** the mixer has parameters, but the current default differential-thrust gain is zero. There is no transmitter-assigned differential-thrust feature enabled by default.
@@ -81,7 +81,7 @@ This catalog describes the **implemented STM32FC_v3 development firmware for PCB
 - **Roll-only wing leveling**, with centered roll stick requesting level wings.
 - Roll stick can request about **+/-10 degrees bank** for limited crosswind correction.
 - Pilot retains pitch/elevator control for rotation and climb.
-- Pilot retains yaw/rudder/nosewheel and throttle control.
+- Pilot retains yaw/rudder and throttle control.
 - Only ailerons use the stabilized surface slew; pilot pitch/yaw/throttle remain direct.
 - Uses the calibrated healthy attitude requirement and fault lockout policy.
 - No launch detector, automatic throttle application, timed acceleration, pitch schedule, climb-altitude completion or automatic mode transition. The pilot chooses when to switch to ASSIST or MANUAL.
@@ -143,7 +143,7 @@ This catalog describes the **implemented STM32FC_v3 development firmware for PCB
 
 ## Outputs, timing and storage
 
-- Eight logical PWM outputs on the board's actual timer-capable pins; ESCs are on physical SERVO8 and SERVO9.
+- Eight logical PWM outputs on the board's actual timer-capable pins; the active ESC is on physical SERVO3 / PD15 / TIM4 CH4. Reserved SERVO8/9 stay at 1000 us.
 - Physical SERVO7/PD11 is deliberately unused because it has no hardware timer PWM. SERVO10 is spare/inactive.
 - Default **50 Hz**, 1000-2000 us servo/ESC pulse range; per-timer-group rate configuration.
 - 400 Hz RC/IMU/control critical tasks; 50 Hz GNSS polling; 100 Hz barometer polling; 50 Hz magnetometer polling; 20 Hz high-rate USB stream.

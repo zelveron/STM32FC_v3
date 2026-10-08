@@ -21,6 +21,6 @@ def frame(t):
             "CRSF_STAT,receiving=1,frames_ok=15432,crc_err=0,resync=0,telem_tx=904",
             "LINK,up_rssi_dbm=-67,up_lq=99,up_snr=9,rf_mode=5",
             "RC,"+",".join(map(str,rc)),
-            f"OUT,{1500+int(roll*5)},{1500-int(roll*5)},1515,1485,1496,1500,1000,1000",
+            f"OUT,{1500+int(roll*5)},1515,1000,1496,1500,{1500-int(roll*5)},1000,1000",
             "SD_DBG,1,FL000042.BIN,bytes=1843200,log_drops=0,usb_drops=0",
             "TELEM,300,300,50,50,0,0", "SCHED,control*,hz=400,last_us=54,max_us=108,overruns=0"]

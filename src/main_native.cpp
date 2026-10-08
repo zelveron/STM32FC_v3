@@ -174,16 +174,16 @@ int main()
 
     // --- mixer (MANUAL passthrough) ---
     {
-        control::MixParams p;   // unit gains, diff thrust off
+        control::MixParams p;   // unit gains
         control::Outputs o;
         control::mix_manual({ 1.0f, 0.0f, 0.0f, 0.0f }, p, o);   // full right roll
         fails += check("mix: roll -> both ailerons +1, nothing else",
-                       o.ch[0] == 1.0f && o.ch[1] == 1.0f &&
-                       o.ch[2] == 0.0f && o.ch[3] == 0.0f && o.ch[4] == 0.0f);
+                       o.ch[0] == 1.0f && o.ch[5] == 1.0f &&
+                       o.ch[1] == 0.0f && o.ch[2] == 0.0f && o.ch[3] == 0.0f && o.ch[4] == 0.0f);
         control::mix_manual({ 0.0f, -0.5f, 0.0f, 0.6f }, p, o);
-        fails += check("mix: elevator L==R, ESC L==R==throttle",
-                       o.ch[2] == -0.5f && o.ch[3] == -0.5f &&
-                       o.ch[6] == 0.6f && o.ch[7] == 0.6f);
+        fails += check("mix: elevator on SERVO2, throttle on SERVO3, reserved ESCs idle",
+                       o.ch[1] == -0.5f && o.ch[2] == 0.6f &&
+                       o.ch[6] == 0.0f && o.ch[7] == 0.0f);
     }
 
     // --- failsafe (debounced both ways; starts engaged) ---
@@ -344,8 +344,8 @@ int main()
         control::Outputs o;
         m.update(mi, o);
         fails += check("mode_manual: roll -> ailerons, throttle -> ESCs",
-                       o.ch[0] == 0.4f && o.ch[1] == 0.4f &&
-                       o.ch[6] == 0.3f && o.ch[7] == 0.3f);
+                       o.ch[0] == 0.4f && o.ch[5] == 0.4f &&
+                       o.ch[2] == 0.3f && o.ch[6] == 0.0f && o.ch[7] == 0.0f);
     }
 
     // --- mode_assist: angle command, bumpless entry, closes to target ---
@@ -359,7 +359,7 @@ int main()
         m.configure(ac, rc, 0.7f, 0.5f);
 
         // bumpless: enter() with a non-zero current output, first update reproduces it
-        control::Outputs cur{}; cur.ch[0] = cur.ch[1] = 0.25f;
+        control::Outputs cur{}; cur.ch[0] = cur.ch[5] = 0.25f;
         m.enter(cur);
         modes::ModeInput mi; mi.dt_s = 0.0025f;
         mi.sticks = { 0.0f, 0.0f, 0.0f, 0.4f };   // sticks centred
@@ -395,7 +395,7 @@ int main()
         roll.kff = 0.006f; roll.kp = 0.004f; roll.ki = 0.05f; roll.i_max = 0.6f;
         m.configure(roll, 400.0f, 110.0f, 120.0f, 0.175f);   // max bank ~10 deg
 
-        // pitch / yaw are passthrough: out.ch[2..3] == pitch stick, ch[4] == yaw
+        // pitch / yaw are passthrough: SERVO2 == pitch stick, SERVO4 == yaw
         m.enter(control::Outputs{});
         modes::ModeInput mi; mi.dt_s = 0.0025f;
         mi.sticks = { 0.0f, 0.6f, -0.3f, 0.5f };   // pitch +0.6, yaw -0.3
@@ -403,9 +403,9 @@ int main()
         control::Outputs o;
         m.update(mi, o);
         fails += check("mode_takeoff: pitch passthrough (elevator == stick)",
-                       std::fabs(o.ch[2] - 0.6f) < 1e-3f && std::fabs(o.ch[3] - 0.6f) < 1e-3f);
+                       std::fabs(o.ch[1] - 0.6f) < 1e-3f && std::fabs(o.ch[2] - 0.5f) < 1e-3f);
         fails += check("mode_takeoff: yaw passthrough (rudder == stick)",
-                       std::fabs(o.ch[4] - (-0.3f)) < 1e-3f);
+                       std::fabs(o.ch[3] - (-0.3f)) < 1e-3f);
         fails += check("mode_takeoff: roll centred -> ~no aileron",
                        std::fabs(o.ch[0]) < 0.05f);
 

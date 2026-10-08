@@ -19,6 +19,8 @@ This firmware detects loss from missing valid CRSF channel frames. It cannot det
 
 Create a new model named, for example, `STM32FC-v3`. Start with simple AETR control channels. Avoid airplane-wizard mixes that already split two ailerons/elevators: the flight controller handles the physical outputs.
 
+Receiver CH1/2/3/4 carry roll/pitch/throttle/yaw. On this aircraft, plug the corresponding devices into **SERVO1/2/3/4**; the opposite aileron goes to **SERVO6**, which the FC reverses. CH5 still arms the motor and CH7 selects mode. Physical SERVO5 stays centered; SERVO8/9 stay at idle.
+
 Use the following mapping. SF and SC are example physical switches; choose an accessible two-position switch for arm and a three-position switch for modes, then verify the channel monitor. Do not assume a switch's physical up/down position equals a particular channel sign.
 
 | Channel | Mix source | Name | Required behavior at the FC |
@@ -78,9 +80,9 @@ The `!` prefix is an application label; it does not automatically create an Edge
 1. Power on with CH5 OFF, low throttle, CH7 MANUAL. Leave the aircraft still for **at least four seconds of valid stationary IMU samples after sensor initialization**. Movement restarts the calibration window. USB `EST,bias_ready=1` confirms calibration of the selected sensor; `IMU_HEALTH` reports the two devices.
 2. In the default bench build, arming is inhibited but surface/mode tests work. Check radio directions in USB `RC`, output mapping in `OUT`, and attitude signs in `ATT`.
 3. For the separately enabled `v2_motor_test` build, leave a stable link established with CH5 low, then switch CH5 high while throttle is at or below 5%. A high arm switch at boot cannot arm the aircraft; switching high with throttle raised is rejected and requires another low/high cycle.
-4. **MANUAL**: direct surface commands; no IMU required. Motors still require arming. Two aileron/elevator outputs are mixed by the FC.
+4. **MANUAL**: direct surface commands; no IMU required. Motors still require arming. SERVO1/6 receive opposite aileron pulses; SERVO2 is elevator and SERVO4 is rudder. SERVO3 is throttle.
 5. **ASSIST**: roll stick commands approximately +/-40 degrees bank; elevator commands approximately +/-26 degrees pitch. Center requests level roll and configured pitch trim (initially zero). Rudder remains direct pilot input with bounded transient yaw damping; full rudder overrides damping. Throttle remains manual. This does not hold heading, altitude, speed or position.
-6. **TKOFF**: roll wing leveling with about +/-10 degrees bank command. You still control rotation, climb pitch, rudder/nosewheel and throttle. There is no automatic launch detection or throttle ramp.
+6. **TKOFF**: roll wing leveling with about +/-10 degrees bank command. You still control rotation, climb pitch, rudder and throttle. There is no automatic launch detection or throttle ramp.
 7. CH5 OFF cuts motor commands immediately in software. Disarmed surfaces still operate in the permitted mode for checks. Return to MANUAL for direct stick control.
 
 Do not arm before calibration if you intend to use ASSIST/TKOFF. Calibration is disabled after the first arming for that boot; early manual arming can leave stabilization unavailable until restart. A normal power cycle is required to reset the flight session, ground reference and latched faults; do this only on the ground.

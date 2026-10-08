@@ -48,8 +48,9 @@ void frame(uint8_t type, std::vector<uint8_t> payload) {
     q.insert(q.end(),payload.begin(),payload.end());q.push_back(crc8(payload));
     crsf::poll();
 }
-void rc(bool arm, int throttle_raw=192, int mode_raw=192) {
+void rc(bool arm, int throttle_raw=192, int mode_raw=192, int roll_raw=992, int pitch_raw=992, int yaw_raw=992) {
     uint16_t ch[16];for(auto &v:ch)v=992;
+    ch[0]=(uint16_t)roll_raw;ch[1]=(uint16_t)pitch_raw;ch[3]=(uint16_t)yaw_raw;
     ch[2]=(uint16_t)throttle_raw;ch[4]=arm?1792:192;ch[6]=(uint16_t)mode_raw;
     std::vector<uint8_t> p(22,0);
     for(int i=0;i<16;++i)for(int b=0;b<11;++b)if(ch[i]&(1<<b))p[(11*i+b)/8]|=1<<((11*i+b)%8);
@@ -145,7 +146,9 @@ void run(unsigned ms,bool send_rc,bool arm,int thr=192,int mode=192) {
 }
 int main() {
     using namespace mock;
-    s_log=&sink; s_output_ready=true; crsf::begin(420000);
+    s_log=&sink; initialize_outputs(); crsf::begin(420000);
+    check("startup SERVO3 throttle and reserved ESCs are idle",pwm[2]==1000&&pwm[6]==1000&&pwm[7]==1000);
+    check("startup active surfaces and spare are centered",pwm[0]==1500&&pwm[1]==1500&&pwm[3]==1500&&pwm[4]==1500&&pwm[5]==1500);
     configure_assist(s_mode_assist);
     control::PidGains tk;tk.kff=.006f;tk.kp=.01f;tk.ki=.02f;tk.i_max=.4f;
     s_mode_takeoff.configure(tk,400,110,120,.175f);
@@ -156,30 +159,39 @@ int main() {
         check("optional SD logger is exercised before arming",sd_calls>0);
         sd_calls=0;
     }
-    run(400,true,false); step(true,true); step(true,true,1152);
+    run(400,true,false);
+    now_us+=2500;rc(false,1152,192,1792,192,1392);task_control();
+    check("MANUAL disarmed roll moves SERVO1 and reversed SERVO6",pwm[0]==2000&&pwm[5]==1000);
+    check("MANUAL pitch reaches SERVO2 and yaw reaches SERVO4",pwm[1]==1000&&pwm[3]>1700&&pwm[3]<1800);
+    check("raised throttle while disarmed keeps SERVO3 idle",pwm[2]==1000);
+    check("unused SERVO5 centered and SERVO8/9 idle",pwm[4]==1500&&pwm[6]==1000&&pwm[7]==1000);
+    now_us+=2500;rc(false,192,192,192,1792,192);task_control();
+    check("reverse stick direction reverses both ailerons oppositely",pwm[0]==1000&&pwm[5]==2000);
+    check("pitch and rudder endpoints remain independent",pwm[1]==2000&&pwm[3]==1000);
+    step(true,false);step(true,true);step(true,true,1152);
     if(!config::flight_enabled) {
         check("default build inhibits motor arming",!s_arming.armed());
-        check("default build holds both ESCs at idle",pwm[6]==1000&&pwm[7]==1000);
+        check("default build holds SERVO3 throttle and reserved ESCs at idle",pwm[2]==1000&&pwm[6]==1000&&pwm[7]==1000);
         std::printf("%d checks, %d failures\n",checks,failures);return failures?1:0;
     }
-    check("valid deliberate arming applies pilot throttle",s_arming.armed()&&pwm[6]==1600);
+    check("valid deliberate arming applies pilot throttle",s_arming.armed()&&pwm[2]==1600&&pwm[6]==1000&&pwm[7]==1000);
     usb_command="\ndfu\n";task_cmd();check("DFU rejected while armed",!rebooted);
     // Continue real link-statistics packets while channels cease.
     for(unsigned n=0;n<79;++n){frame(0x14,std::vector<uint8_t>(10,0));step(false,true);}
     check("last valid RC is usable just before age timeout",s_arming.armed());
     step(false,true);
-    check("200 ms RC age cuts both motors",s_failsafe.active()&&pwm[6]==1000&&pwm[7]==1000);
+    check("200 ms RC age cuts SERVO3 throttle",s_failsafe.active()&&pwm[2]==1000&&pwm[6]==1000&&pwm[7]==1000);
     usb_command="dfu\n";task_cmd();check("DFU rejected during airborne RC failsafe",!rebooted);
     run(100,false,true);
     check("healthy failsafe commands roll toward level",s_mode_cur==modes::Id::assist&&pwm[0]<1500);
     check("failsafe keeps flight session latched",s_flight_session);
     run(290,true,true,1152);
-    check("recovery does not restore throttle before stable window",!s_arming.armed()&&pwm[6]==1000);
+    check("recovery does not restore throttle before stable window",!s_arming.armed()&&pwm[2]==1000);
     run(20,true,true,1152);
-    check("requested automatic recovery restores current throttle",s_arming.armed()&&pwm[6]==1600);
+    check("requested automatic recovery restores current throttle",s_arming.armed()&&pwm[2]==1600&&pwm[6]==1000&&pwm[7]==1000);
     run(220,false,true);
     imu_ok=false;step(false,true);
-    check("failsafe with failed estimator centers surfaces",pwm[0]==1500&&pwm[2]==1500&&pwm[6]==1000);
+    check("failsafe with failed estimator centers surfaces",pwm[0]==1500&&pwm[1]==1500&&pwm[3]==1500&&pwm[5]==1500&&pwm[2]==1000);
     check("IMU fault demotion is latched",s_assist_lockout);
     run(320,true,false,192);
     check("CH5 low on recovery cancels prior arming",!s_arming.armed());
@@ -313,24 +325,24 @@ int main() {
     bool continuity=true,finite=true,throttle_live=true;
     for(float bank:{-.9f,-.5235988f,0.f,.5235988f,.9f}) {
         modes::ModeAssist mode;configure_assist(mode);
-        control::Outputs current;current.ch[0]=current.ch[1]=.6f;
-        current.ch[2]=current.ch[3]=-.2f;mode.enter(current);
+        control::Outputs current;current.ch[0]=current.ch[5]=.6f;
+        current.ch[1]=current.ch[3]=-.2f;mode.enter(current);
         modes::ModeInput in;in.dt_s=.0025f;in.roll_rad=bank;in.sticks.throttle=.7f;
         in.allow_integrators=false;control::Outputs out;
         mode.update(in,out);continuity&=std::fabs(out.ch[0]-.6f)<1e-6;
         for(int n=0;n<400;++n) {
             const auto prev=out;in.allow_integrators=n>100;mode.update(in,out);
-            for(int i=0;i<6;++i) {continuity&=std::fabs(out.ch[i]-prev.ch[i])<=.03001f;finite&=std::isfinite(out.ch[i]);}
-            throttle_live&=std::fabs(out.ch[6]-.7f)<1e-6;
+            for(int i=0;i<6;++i) {if(!control::is_surface_output(i))continue;continuity&=std::fabs(out.ch[i]-prev.ch[i])<=.03001f;finite&=std::isfinite(out.ch[i]);}
+            throttle_live&=std::fabs(out.ch[2]-.7f)<1e-6;
         }
     }
     check("ASSIST entry/I-enable obeys configured 15 us per control tick ceiling",continuity);
     check("surface slew preserves live pilot throttle",throttle_live&&finite);
     modes::ModeTakeoff takeoff;takeoff.configure(tk,400,110,120,.175f);
-    control::Outputs prev;prev.ch[0]=.5;takeoff.enter(prev);
+    control::Outputs prev;prev.ch[0]=prev.ch[5]=.5;takeoff.enter(prev);
     modes::ModeInput in;in.dt_s=.0025f;in.roll_rad=.8f;in.sticks={0,.6f,-.4f,.7f};
     control::Outputs out;takeoff.update(in,out);
-    check("TKOFF smooths roll while retaining pilot pitch/yaw/throttle",out.ch[0]==.5f&&out.ch[2]==.6f&&out.ch[4]==-.4f&&out.ch[6]==.7f);
+    check("TKOFF smooths roll while retaining pilot pitch/yaw/throttle",out.ch[0]==.5f&&out.ch[5]==.5f&&out.ch[1]==.6f&&out.ch[3]==-.4f&&out.ch[2]==.7f);
     control::SrvChannel servo;
     check("nonfinite actuator commands produce defined pulses",servo.from_norm(NAN)==1500&&servo.from_unipolar(NAN)==1000);
     core::Failsafe wrap;wrap.update(true,0xffffff00);wrap.update(true,0x30);
@@ -339,6 +351,6 @@ int main() {
     // Deliberate missed-control-deadline case after a flight session.
     s_flight_session=true;s_control_fault=false;
     now_us+=50000;task_control();
-    check("control deadline fault inhibits motors",s_control_fault&&!s_arming.armed()&&pwm[6]==1000);
+    check("control deadline fault inhibits motors",s_control_fault&&!s_arming.armed()&&pwm[2]==1000);
     std::printf("%d checks, %d failures\n",checks,failures);return failures?1:0;
 }

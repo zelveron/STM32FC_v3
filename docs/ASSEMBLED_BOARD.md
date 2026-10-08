@@ -7,6 +7,36 @@ must not be treated as validation of this card.
 
 ## Firmware configuration
 
+### Current AETR6 aircraft mapping, final update on 2026-10-08
+
+The user selected SERVO1 aileron, SERVO2 elevator, SERVO3 throttle, SERVO4
+rudder and SERVO6 reversed aileron. The earlier sections below describe the
+previous output layout. Physical GPIO/timer routing is unchanged; the mixer,
+motor-output classification, startup pulses, stabilization transitions,
+controller logging, simulator and GUI labels now use the new layout.
+SERVO5 stays centered; SERVO8/9 remain at 1000 us.
+
+The updated `v2_flight` image was programmed with **USB power only**, after
+the user removed battery/BEC/receiver power. All **142,424 payload bytes**
+matched flash readback; the prior complete 1 MiB flash was backed up.
+Image SHA256 including DFU suffix:
+`9cfeaa562712a515d48f20d3b060ebc4cc0975014f068817a5084125905b266f`.
+
+Over 16 seconds / 320 `OUT` reports, SERVO3 stayed at 1000 us, SERVO5 stayed
+at 1500 us, SERVO8/9 stayed at 1000 us, and SERVO1 + SERVO6 always equaled
+3000 us. One report was `OUT,1244,1303,1000,1512,1500,1756,1000,1000`.
+The application reported `flight_enabled=1,armed=0,failsafe=1,timing_fault=0`.
+RC loss is expected with the receiver unpowered; healthy-sensor failsafe
+continues surface leveling. Both BMI270s and BMP581 were healthy and gyro
+calibration completed. BMM350 remains unresolved; SD logging was inactive.
+
+Both ARM profiles (`v2`, `v2_flight`), the complete host suite including
+startup/arming/failsafe/automatic recovery/reversed-surface regressions,
+and 33 GUI tests passed. The GUI EXE was rebuilt as `2026.10.08-aetr6`.
+Electrical pulse measurements and physical servo motion were not tested
+with BEC power removed. Evidence and backup are retained beside the checkout
+in `build-tools/aetr6-flash-2026-10-08/`.
+
 ### Later Windows BMM350 check on 2026-10-08
 
 After the user connected the BMM350, the board enumerated as `0483:5740`,

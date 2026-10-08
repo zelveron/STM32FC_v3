@@ -9,7 +9,7 @@ The two directions have different purposes. TX16S -> ER8 -> FC carries pilot com
 | CH1 | Aileron / roll | Direct aileron | Bank target, +/-40 deg | Bank target, +/-10 deg |
 | CH2 | Elevator / pitch | Direct elevator | Pitch target, +/-26 deg with configured trim | Direct elevator |
 | CH3 | Throttle | Pilot throttle, subject to arming/failsafe | Same | Same |
-| CH4 | Rudder / yaw | Direct rudder/nosewheel | Direct pilot rudder plus bounded yaw damping; full stick overrides damping | Direct rudder/nosewheel |
+| CH4 | Rudder / yaw | Direct rudder | Direct pilot rudder plus bounded yaw damping; full stick overrides damping | Direct rudder |
 | CH5 | Arm switch | Low = disarm; deliberate high transition at idle = initial arm | Same | Same |
 | CH6 | Spare | Ignored | Ignored | Ignored |
 | CH7 | Mode switch | Low requests MANUAL | Middle requests ASSIST | High requests TKOFF |

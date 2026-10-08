@@ -51,7 +51,7 @@ int main() {
             control::Outputs out; mode.update(in,out);
             // 50 Hz zero-order hold + one frame delay + 50 ms actuator lag,
             // capped at six normalized units/s. This is a test assumption.
-            if(step%8==0) for(int i=0;i<3;++i) { delayed[i]=held[i]; held[i]=out.ch[2*i]; }
+            if(step%8==0) for(int i=0;i<3;++i) { delayed[i]=held[i]; held[i]=out.ch[control::kAxisOutputs[i]]; }
             for(int i=0;i<3;++i) {
                 const double delta=(delayed[i]-actual[i])*.0025/(.05+.0025);
                 actual[i]+=std::max(-.015,std::min(.015,delta));

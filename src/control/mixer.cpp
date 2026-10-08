@@ -12,18 +12,13 @@ void mix_manual(const Sticks& in, const MixParams& p, Outputs& out)
     const float ele = clamp1(in.pitch * p.elevator_gain);
     const float rud = clamp1(in.yaw   * p.rudder_gain);
 
-    out.ch[0] = ail;                              // aileron L
-    out.ch[1] = ail;                              // aileron R
-    out.ch[2] = ele;                              // elevator L
-    out.ch[3] = ele;                              // elevator R
-    out.ch[4] = rud;                              // rudder
-    out.ch[5] = clamp1(in.yaw * p.nosewheel_gain);// nosewheel steering
-
-    float dt = 0.0f;
-    if (in.throttle > p.diff_thrust_min_throttle)
-        dt = in.yaw * p.diff_thrust_gain;
-    out.ch[6] = clamp01(in.throttle + dt);        // ESC L
-    out.ch[7] = clamp01(in.throttle - dt);        // ESC R
+    out.ch[0] = ail;                              // aileron / physical SERVO1
+    out.ch[1] = ele;                              // elevator / physical SERVO2
+    out.ch[2] = clamp01(in.throttle);              // throttle / physical SERVO3
+    out.ch[3] = rud;                              // rudder / physical SERVO4
+    out.ch[4] = 0.0f;                             // unused SERVO5: center
+    out.ch[5] = ail;                              // SERVO6: reversed at pulse conversion
+    out.ch[6] = out.ch[7] = 0.0f;                 // unused SERVO8/9: ESC idle
 }
 
 } // namespace control

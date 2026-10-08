@@ -2,7 +2,9 @@
 
 Current behavior and hardware are documented in README.md and docs/HARDWARE_V2.md. The user authorized the v2 hardware migration; historical v1 constraints are archived in docs/history/CLAUDE-v1.md and do not define the new board.
 
-Current card confirmed 2026-10-08: dual BMI270 is the only supported IMU configuration. The default `v2_bmi270` profile disables the magnetometer and inhibits both motors. The optional `v2` profile enables BMM350 support. Current bench evidence is in docs/ASSEMBLED_BOARD.md; do not substitute older assembly results.
+Current card confirmed 2026-10-08: dual BMI270 is the only supported IMU configuration. The default `v2_bmi270` profile disables the magnetometer and inhibits motor arming. The optional `v2` profile enables BMM350 support. Current bench evidence is in docs/ASSEMBLED_BOARD.md; do not substitute older assembly results.
+
+Current aircraft output layout: SERVO1 aileron, SERVO2 elevator, SERVO3 throttle, SERVO4 rudder, SERVO6 reversed aileron. SERVO5 remains centered and SERVO8/9 remain at 1000 us. Motor safety classification includes SERVO3; never apply surface transition smoothing to it.
 
 Use the supplied v2.2 KiCad pin map: F407VG, dual BMI270, BMP581, BMM350, SAM-M10Q, UART4/J2 for ER8. Preserve the user's choice of automatic throttle restoration after stable RC recovery. Clearly distinguish implementation, host simulation, hardware tests and flight qualification.
 

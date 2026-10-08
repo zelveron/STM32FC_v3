@@ -1,5 +1,7 @@
 # STM32FC_v3
 
+**Current aircraft layout (AETR6):** SERVO1 aileron, SERVO2 elevator, SERVO3 throttle, SERVO4 rudder, SERVO6 reversed aileron. Use the matching `2026.10.08-aetr6` GUI and firmware release linked below; earlier releases use a different output layout.
+
 Custom flight-controller firmware for RC fixed-wing aircraft, targeting the **manufactured v2.2 STM32F407VGT6 PCB**. It provides MANUAL, roll/pitch ASSIST, TKOFF wing leveling, dual-IMU sensing, CRSF radio control/telemetry, USB diagnostics, and asynchronous SD flight logging.
 
 **v3 is the software repository generation; v2.2 is the PCB revision.** PlatformIO profiles retain their `v2` names to identify that board. This project continues [STM32FC_v2](https://github.com/zelveron/STM32FC_v2); older board instructions are archived in [docs/history](docs/history/README-v1.md).
@@ -20,7 +22,7 @@ The GUI now separates GNSS communication from navigation status. Firmware emits 
 
 The current source includes a modern Qt ground station with five pages: **Flight deck, Receiver, Sensors, Diagnostics and System**. It provides a 3D aircraft view, artificial horizon, offline GPS ground track, speed/altitude/climb, satellite and component indicators, all 16 RC channels, eight PWM commands, sensor diagnostics and a searchable telemetry table. Explicit **Preview** mode works without hardware and cannot send commands. Stale or invalid telemetry clears live instruments; last raw values remain available with their ages.
 
-Download the [standalone Windows x64 EXE](https://github.com/zelveron/STM32FC_v3/releases/download/gui-2026.10.08-modern/STM32FC-GUI.exe) or the [complete portable ZIP](https://github.com/zelveron/STM32FC_v3/releases/download/gui-2026.10.08-modern/STM32FC-GUI-2026.10.08-modern-Windows-x64.zip) from the [modern ground-station release](https://github.com/zelveron/STM32FC_v3/releases/tag/gui-2026.10.08-modern). Python, Qt, serial support and DFU utilities are bundled. The target is **Windows 10/11 x64**, with no separately installed Python or Qt required; operating-system USB drivers remain separate. See the [Windows guide](docs/GUI_WINDOWS.md) for setup, source, licenses and reproducible packaging. Flight and bench firmware downloads are separate, explicitly named release assets; opening the GUI never flashes either image.
+Download the [standalone Windows x64 EXE](https://github.com/zelveron/STM32FC_v3/releases/download/gui-2026.10.08-aetr6/STM32FC-GUI.exe) or the [complete portable ZIP](https://github.com/zelveron/STM32FC_v3/releases/download/gui-2026.10.08-aetr6/STM32FC-GUI-2026.10.08-aetr6-Windows-x64.zip) from the [AETR6 ground-station and firmware release](https://github.com/zelveron/STM32FC_v3/releases/tag/gui-2026.10.08-aetr6). Python, Qt, serial support and DFU utilities are bundled. The target is **Windows 10/11 x64**, with no separately installed Python or Qt required; operating-system USB drivers remain separate. See the [Windows guide](docs/GUI_WINDOWS.md) for setup, source, licenses and reproducible packaging. Flight and bench firmware downloads are separate, explicitly named release assets; opening the GUI never flashes either image.
 
 For source-based use:
 
@@ -55,7 +57,7 @@ This table describes code present in the repository. Physical validation is a se
 | MANUAL | Direct pilot surface/throttle commands through the mixer | Motor authorization still applies; direct control needs no IMU |
 | ASSIST | Roll/pitch angle control, rate controllers, trim, turn geometry and rudder damping | Pilot throttle; no altitude, speed, position or heading hold |
 | TKOFF | Wing leveling with limited bank demand | Pilot pitch, rudder and throttle; no automatic launch sequence |
-| Outputs | Two ailerons, two elevators, rudder, nosewheel, two ESCs | Standard PWM; endpoints/directions require aircraft setup |
+| Outputs | SERVO1 aileron, SERVO2 elevator, SERVO3 throttle, SERVO4 rudder, SERVO6 reversed aileron | Standard PWM; endpoints/directions require aircraft setup |
 | IMUs | Two BMI270 drivers, 400 Hz FIFO processing, individual calibration/filtering/health | Primary/backup selection, one attitude estimator |
 | Attitude | Quaternion Mahony-style fusion, gravity trust gates, bounded bias correction | Relative yaw; no absolute heading or navigation EKF |
 | Other sensors | BMP581 pressure/vario, SAM-M10Q GNSS, BMM350 compensated diagnostics | GNSS/magnetometer are not fused into attitude |
@@ -128,14 +130,14 @@ All listed output headers have **pin 1 = GND, pin 2 = VOUT2, pin 3 = signal**. I
 
 | Logical output | Function | PCB connector | GPIO / timer |
 |---|---|---|---|
-| 1 | Left aileron | SERVO1 / J4 | PC7 / TIM3 CH2 |
-| 2 | Right aileron | SERVO2 / J5 | PC6 / TIM3 CH1 |
-| 3 | Left elevator | SERVO3 / J6 | PD15 / TIM4 CH4 |
-| 4 | Right elevator | SERVO4 / J7 | PD14 / TIM4 CH3 |
-| 5 | Rudder | SERVO5 / J10 | PD13 / TIM4 CH2 |
-| 6 | Nosewheel | SERVO6 / J12 | PD12 / TIM4 CH1 |
-| 7 | Left ESC | **SERVO8 / J20** | PA8 / TIM1 CH1 |
-| 8 | Right ESC | **SERVO9 / J21** | PA9 / TIM1 CH2 |
+| 1 | Aileron | SERVO1 / J4 | PC7 / TIM3 CH2 |
+| 2 | Elevator | SERVO2 / J5 | PC6 / TIM3 CH1 |
+| 3 | Throttle / ESC | SERVO3 / J6 | PD15 / TIM4 CH4 |
+| 4 | Rudder | SERVO4 / J7 | PD14 / TIM4 CH3 |
+| 5 | Spare (1500 us) | SERVO5 / J10 | PD13 / TIM4 CH2 |
+| 6 | Aileron, reversed | SERVO6 / J12 | PD12 / TIM4 CH1 |
+| 7 | Reserved ESC header (1000 us) | **SERVO8 / J20** | PA8 / TIM1 CH1 |
+| 8 | Reserved ESC header (1000 us) | **SERVO9 / J21** | PA9 / TIM1 CH2 |
 | Unused | No timer PWM | **SERVO7 / J19** | PD11 |
 | Spare, inactive | Future output | SERVO10 / J22 | PA10 / TIM1 CH3 |
 
@@ -166,7 +168,7 @@ Start arm OFF, low throttle, MANUAL. After initialization, hold still for **four
 
 - **MANUAL:** direct pilot surfaces and throttle through the mixer; no IMU required. Motors still follow arming/failsafe rules.
 - **ASSIST:** approximately +/-40 degrees bank and +/-26 degrees pitch around configured pitch trim. Centered sticks request level roll and trim pitch. Pilot retains throttle and direct rudder with bounded transient damping.
-- **TKOFF:** roll-only leveling with approximately +/-10 degrees bank demand. Pilot retains pitch, rudder/nosewheel and throttle, and chooses when to exit. There is no launch detector, autothrottle or climb schedule.
+- **TKOFF:** roll-only leveling with approximately +/-10 degrees bank demand. Pilot retains pitch, rudder and throttle, and chooses when to exit. There is no launch detector, autothrottle or climb schedule.
 
 Initial motor authorization requires a usable link, CH5 observed low, then a rising CH5 transition at throttle <=5%. CH5 high at boot cannot arm. CH5 low cuts motor commands; disarmed surfaces still operate. **Default firmware rejects motor authorization entirely.**
 
@@ -259,7 +261,7 @@ pio run -e crsf_probe
 | Environment | Purpose | Result |
 |---|---|---|
 | `v2_bmi270` (default) | Current dual-BMI270 card, magnetometer disabled | Motor-inhibited bench firmware; `.pio/build/v2_bmi270/firmware.bin` |
-| `v2` (optional BMM350) | BMI270 development with magnetometer support enabled | `.pio/build/v2/firmware.bin`; `FC_FLIGHT_ENABLED=0`, both ESCs at minimum |
+| `v2` (optional BMM350) | BMI270 development with magnetometer support enabled | `.pio/build/v2/firmware.bin`; `FC_FLIGHT_ENABLED=0`, SERVO3 throttle and reserved ESC headers at minimum |
 | `v2_motor_test` | Explicit motor-enabled qualification | `FC_FLIGHT_ENABLED=1`; select only after electrical/motor-disabled checks |
 | `v2_flight` | Full motor-enabled flight firmware | Same application as `v2_motor_test`: MANUAL/ASSIST/TKOFF, CH5 arm, CH7 mode, CRSF/USB and SD logging |
 | `crsf_probe` | Independent UART4/USB diagnostic | Isolates receiver wiring/protocol issues |

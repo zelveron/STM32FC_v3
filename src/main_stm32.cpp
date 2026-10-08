@@ -289,7 +289,7 @@ void task_control()   // 400 Hz -- CRSF -> arming/failsafe -> mode -> mixer -> P
 
     const bool fs = s_failsafe.active();
     for (int i = 0; i < 8; i++) {
-        const bool is_thr = (i == 6 || i == 7);
+        const bool is_thr = control::is_motor_output(i);
         uint16_t us;
         if (is_thr && (fs || !armed)) us=s_srv[i].safe_us(true);
         else if (fs && (!imu_ok || s_assist_lockout || !imu_v2::bias_ready())) us=s_srv[i].safe_us(false);
@@ -411,8 +411,8 @@ void task_control_log() // 100 Hz setpoint/output diagnostics
     f.demand[0]=core::log_i16(s_mode_cur==modes::Id::assist?s_mode_assist.demand_p():s_mode_cur==modes::Id::takeoff?s_mode_takeoff.demand_p():0,16);
     f.demand[1]=core::log_i16(s_mode_cur==modes::Id::assist?s_mode_assist.demand_q():0,16);
     f.measured[0]=core::log_i16(g_gx,16); f.measured[1]=core::log_i16(g_gy,16); f.measured[2]=core::log_i16(g_gz,16);
-    for(unsigned axis=0;axis<3;++axis) f.surface[axis]=core::log_i16(s_out.ch[axis*2],10000);
-    f.throttle=uint16_t(s_out.ch[6]*10000); f.mode=uint8_t(s_mode_cur);
+    for(unsigned axis=0;axis<3;++axis) f.surface[axis]=core::log_i16(s_out.ch[control::kAxisOutputs[axis]],10000);
+    f.throttle=uint16_t(s_out.ch[control::kThrottleOutput]*10000); f.mode=uint8_t(s_mode_cur);
     f.flags=(s_arming.armed()?1:0)|(s_failsafe.active()?2:0)|(s_flying?4:0);
     core::finish_diagnostic(f); s_log_ring.push(&f,sizeof(f));
 }
@@ -664,6 +664,22 @@ void task_cmd()   // 10 Hz
     }
 }
 
+void initialize_outputs()
+{
+    // Define outputs and idle before sensor/storage bring-up, without a USB wait.
+    for(unsigned i=0;i<8;++i) {
+        s_srv[i].min_us=config::servo_min[i]; s_srv[i].center_us=config::servo_center[i];
+        s_srv[i].max_us=config::servo_max[i]; s_srv[i].reversed=config::servo_reverse[i];
+    }
+    s_output_ready=hal::pwm_config(hal::PwmGroup::ailerons,config::pwm_hz_ailerons)==hal::Status::ok;
+    s_output_ready=(hal::pwm_config(hal::PwmGroup::tail,config::pwm_hz_tail)==hal::Status::ok)&&s_output_ready;
+    s_output_ready=(hal::pwm_config(hal::PwmGroup::motors,config::pwm_hz_motors)==hal::Status::ok)&&s_output_ready;
+    for(unsigned i=0;i<8;++i) {
+        const auto group=i<2?hal::PwmGroup::ailerons:i<6?hal::PwmGroup::tail:hal::PwmGroup::motors;
+        s_output_ready=(hal::pwm_write_us(group,i<2?i:i<6?i-2:i-6,s_srv[i].safe_us(control::is_motor_output(i)))==hal::Status::ok)&&s_output_ready;
+    }
+}
+
 } // namespace
 
 void setup()
@@ -681,18 +697,7 @@ void setup()
     L().print(F("boot: v2.2 dual ")); L().print(config::imu_model);
     L().println(F("/BMP581/SAM-M10Q; development build"));
     L().println(config::flight_enabled?F("FLIGHT_GATE,enabled"):F("FLIGHT_GATE,bench_motor_inhibit"));
-    // Define outputs and idle before sensor/storage bring-up, without a USB wait.
-    for(unsigned i=0;i<8;++i) {
-        s_srv[i].min_us=config::servo_min[i]; s_srv[i].center_us=config::servo_center[i];
-        s_srv[i].max_us=config::servo_max[i]; s_srv[i].reversed=config::servo_reverse[i];
-    }
-    s_output_ready=hal::pwm_config(hal::PwmGroup::ailerons,config::pwm_hz_ailerons)==hal::Status::ok;
-    s_output_ready=(hal::pwm_config(hal::PwmGroup::tail,config::pwm_hz_tail)==hal::Status::ok)&&s_output_ready;
-    s_output_ready=(hal::pwm_config(hal::PwmGroup::motors,config::pwm_hz_motors)==hal::Status::ok)&&s_output_ready;
-    for(unsigned i=0;i<8;++i) {
-        const auto group=i<2?hal::PwmGroup::ailerons:i<6?hal::PwmGroup::tail:hal::PwmGroup::motors;
-        s_output_ready=(hal::pwm_write_us(group,i<2?i:i<6?i-2:i-6,s_srv[i].safe_us(i>=6))==hal::Status::ok)&&s_output_ready;
-    }
+    initialize_outputs();
     hal::delay_ms(5); // sensor power rails settle, startup only
     s_bmi_ready=!watchdog_reset && imu_v2::begin();
     L().println(s_bmi_ready?F("BMI_STATUS,1"):F("BMI_STATUS,0"));

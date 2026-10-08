@@ -69,14 +69,14 @@ All listed three-pin output headers have **pin 1 = ground, pin 2 = VOUT2, pin 3 
 
 | Logical output | Function | PCB label / header | MCU timer |
 |---|---|---|---|
-| 1 | Left aileron | SERVO1 / J4 | PC7, TIM3 CH2 |
-| 2 | Right aileron | SERVO2 / J5 | PC6, TIM3 CH1 |
-| 3 | Left elevator | SERVO3 / J6 | PD15, TIM4 CH4 |
-| 4 | Right elevator | SERVO4 / J7 | PD14, TIM4 CH3 |
-| 5 | Rudder | SERVO5 / J10 | PD13, TIM4 CH2 |
-| 6 | Nosewheel | SERVO6 / J12 | PD12, TIM4 CH1 |
-| 7 | Left ESC | **SERVO8 / J20** | PA8, TIM1 CH1 |
-| 8 | Right ESC | **SERVO9 / J21** | PA9, TIM1 CH2 |
+| 1 | Aileron | SERVO1 / J4 | PC7, TIM3 CH2 |
+| 2 | Elevator | SERVO2 / J5 | PC6, TIM3 CH1 |
+| 3 | Throttle / ESC | SERVO3 / J6 | PD15, TIM4 CH4 |
+| 4 | Rudder | SERVO4 / J7 | PD14, TIM4 CH3 |
+| 5 | Spare (1500 us) | SERVO5 / J10 | PD13, TIM4 CH2 |
+| 6 | Aileron, reversed | SERVO6 / J12 | PD12, TIM4 CH1 |
+| 7 | Reserved ESC header (1000 us) | **SERVO8 / J20** | PA8, TIM1 CH1 |
+| 8 | Reserved ESC header (1000 us) | **SERVO9 / J21** | PA9, TIM1 CH2 |
 | Unused | No hardware PWM | **SERVO7 / J19** | PD11 has no timer PWM alternate function |
 | Spare, inactive | Future output | SERVO10 / J22 | PA10, TIM1 CH3 |
 
@@ -84,7 +84,26 @@ PD11's alternate functions were checked against the [STM32F407 pin table](https:
 
 Each timer group shares its output frequency. Defaults are 50 Hz for ailerons, tail and motors, with 1000/1500/2000 us minimum/center/maximum. This is a conservative starting point for EMAX ES08MD II servos and the specified PWM ESC options, not a verified high-rate qualification. No DShot, bidirectional motor control, integrated power-stage commutation or ESC telemetry is implemented. Verify that the Flycolor unit is configured for the intended throttle behavior before enabling motor output.
 
-The mixer sends the same normalized roll demand to both aileron outputs; mirrored mechanics often require reversing **one output** in `src/config/airframe.hpp`. Likewise, check each elevator independently. Do not use transmitter channel reversal to compensate for an incorrectly oriented IMU or mechanically reversed individual servo.
+The current aircraft mapping was selected on 2026-10-08: **SERVO1 aileron, SERVO2 elevator, SERVO3 throttle, SERVO4 rudder, SERVO6 reversed aileron**. SERVO6 has `servo_reverse[5]=true`, applied once after the common roll controller; with default endpoints its pulse is `3000 - SERVO1`. SERVO5 stays centered and SERVO8/9 stay at 1000 us. SERVO3 uses the same arming, failsafe and timing-fault protections as motor outputs, including a 1000 us pulse from startup.
+
+TIM3 now serves SERVO1/2, TIM4 serves SERVO3/4/5/6, and TIM1 serves reserved SERVO8/9. The legacy configuration names `pwm_hz_ailerons`, `pwm_hz_tail`, `pwm_hz_motors` refer to those timer groups, not their new individual roles. Keep all groups at 50 Hz for this setup. Check each active output independently. Do not use transmitter channel reversal to compensate for an incorrectly oriented IMU or mechanically reversed individual servo.
+
+### Schematic and PCB cross-check, 2026-10-08
+
+The supplied `Plane_Board_Design.kicad_pcb` and a fresh KiCad schematic netlist
+agree on every header signal: SERVO1/2/3/4/5/6/7/8/9/10 map to
+PC7/PC6/PD15/PD14/PD13/PD12/PD11/PA8/PA9/PA10, respectively. Their MCU U26
+package pins are 64/63/62/61/60/59/58/67/68/69. The STM32 Arduino variant's
+timer alternate functions match all eight configured outputs. KiCad reported
+no unconnected items; the design still has other DRC violations, so this
+focused pin-map check is not a complete PCB qualification.
+
+Before the mapping change, live USB first showed RC loss, then recovered to
+LQ 100% with changing pilot/output commands (for example CH1 1432 us and
+aileron command 1439 us). This confirms command reception and calculation,
+not electrical pulse shape or physical servo movement. Separate BEC power
+still requires a common ground with the FC. All output-header pin 1 pads are
+GND, pin 2 pads VOUT2, and pin 3 pads the listed signal.
 
 ## Chosen mounting orientation
 

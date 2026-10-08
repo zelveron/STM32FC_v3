@@ -44,11 +44,11 @@ int main() {
     modes::ModeInput in; in.roll_rad=bank; in.gyro_q_dps=8.11f; in.gyro_r_dps=14.047f; in.sticks.roll=bank/.7f;
     control::Outputs out;
     for(int i=0;i<1000;++i) mode.update(in,out);
-    check("no-pitot steady turn does not command opposing rudder",std::fabs(out.ch[4])<.002f);
+    check("no-pitot steady turn does not command opposing rudder",std::fabs(out.ch[control::kYawOutput])<.002f);
     check("no-pitot geometry retains pitch rate without attitude error",std::fabs(mode.demand_q()-8.11f)<.03f);
     in.sticks.yaw=1;
     for(int i=0;i<1000;++i) mode.update(in,out);
-    check("full pilot rudder overrides yaw damping",std::fabs(out.ch[4]-1)<.001);
+    check("full pilot rudder overrides yaw damping",std::fabs(out.ch[control::kYawOutput]-1)<.001);
     tuning.pitch_trim_rad=.08f; mode.set_tuning(tuning); mode.enter({});
     in={}; in.pitch_rad=.08f;
     for(int i=0;i<300;++i) mode.update(in,out);
