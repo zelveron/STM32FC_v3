@@ -6,7 +6,7 @@ First complete the [board corrections and wiring](HARDWARE_V2.md). For all bench
 
 ## 1. Receiver and radio link
 
-1. Use the ER8's **dedicated serial connector**. ER8 TX goes to J2 pin 2; ER8 RX to J2 pin 3; ground to J2 pin 1. Supply receiver power separately from a suitable regulated source. J2 has no power pin.
+1. Use the ER8's **dedicated serial connector**. With power off, connect ER8 **TX → `MCU_RX_PI_TX` / J2 pin 2 / PA1**, ER8 **RX → `MCU_TX_PI_RX` / J2 pin 3 / PA0**, and ground to J2 pin 1. `PI` is the PCB's old Raspberry Pi naming; follow the **MCU_RX/MCU_TX** direction. Both signal wires are needed for channels into the FC and FC telemetry back to the handset. Supply receiver power separately from a suitable regulated source. J2 has no power pin.
 2. Set the ER8 serial protocol to **CRSF**, uninverted, full duplex, **420000 baud / 8N1**. Use the receiver Web UI or available ELRS Lua receiver settings. Do not select SBUS, inverted CRSF, or MAVLink. If a firmware version exposes baud separately, verify it matches.
 3. The ER8 has its own serial port: do not follow instructions for other PWM receivers that convert PWM outputs 2/3 to a serial port. See the [official PWM receiver guide](https://www.expresslrs.org/hardware/pwm-receivers/).
 4. Use compatible ELRS major versions and the same binding phrase on the active TX module and ER8, or their supported binding procedure. Select the correct **2.4 GHz ER8** receiver target when updating. This does not change EdgeTX itself.
@@ -98,6 +98,8 @@ The firmware timeout starts at the last valid serial channel packet. Add the rec
 | Symptom | Check |
 |---|---|
 | No RC | ER8 serial protocol, RX/TX crossover, common ground, separate receiver power; `CRSF_STAT,receiving=1` |
+| Radio is bound, but FC has zero valid frames | Check ER8 TX is on `MCU_RX_PI_TX`, not `MCU_TX_PI_RX`; binding only establishes the RF link |
+| RC channels work, but FC sensors are absent on the handset | Connect ER8 RX to `MCU_TX_PI_RX`; check outgoing `CRSF_STAT,telem_tx` increases, telemetry is enabled, and run Discover new sensors on EdgeTX |
 | Sticks work but modes do not | CH7 received values and calibration; look at `MODE,req=` versus `MODE,active=` |
 | CH5 mix appears correct but arming differs | ELRS `Arm using` setting, actual received CH5, stable link and low throttle |
 | ESCs always at 1000 | Default motor-inhibit build, disarm/failsafe, output or timing fault; inspect boot `FLIGHT_GATE` and FM |

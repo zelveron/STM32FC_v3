@@ -129,6 +129,15 @@ This catalog describes the **implemented STM32FC_v3 development firmware for PCB
 
 - BMM350 official Bosch initialization, compensation, 25 Hz acquisition and ready polling.
 - Finite-value checks and 200 ms health expiry.
+- Continuous `MAG_HEALTH` USB diagnostics: firmware enable, completed startup,
+  current health, failed stage, Bosch result, chip ID, I2C error count/last
+  failed register, last ready status and valid sample count. Boot-only,
+  read-only CHIP_ID probes at `0x14` / `0x15` distinguish a failed transfer
+  (`-1`) from a returned ID (`51` is the expected `0x33`). Probes never change
+  the configured address or repeatedly retry a failed sensor during flight.
+  Stage codes: 0 ready/not started, 1 bus setup, 2 Bosch initialization,
+  3 interrupt configuration, 4 interrupt enable, 5 rate/averaging, 6 axes,
+  7 normal mode, 8 status read, 9 sample read and 10 nonfinite sample.
 - Raw aircraft-uncalibrated magnetic axes over USB for future calibration/testing.
 - Not fused into heading until the board supply is fixed and mounting, hard/soft-iron calibration and motor-interference rejection are validated.
 

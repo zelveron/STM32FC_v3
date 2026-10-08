@@ -7,11 +7,74 @@ must not be treated as validation of this card.
 
 ## Firmware configuration
 
+### Later Windows BMM350 check on 2026-10-08
+
+After the user connected the BMM350, the board enumerated as `0483:5740`,
+COM6. A 12-second read reported `mag=0` and no magnetic samples. Both BMI270s
+now reported `error0=0,error1=0,regs0=240100,regs1=240100`, both healthy, and
+BMP581 reported `valid=1,error=0`. These newer observations supersede the
+IMU 2 / barometer failures in the earlier Pi bench table below; they do not
+identify what changed physically.
+
+With explicit user authorization, the complete 1 MiB original flash was backed
+up, then the motor-inhibited `v2` image was programmed. Every programmed byte
+was read back and compared. `mag=1` was confirmed, but no `MAG` samples appeared
+in 15 seconds. GNSS obtained a fix with five satellites during that window.
+
+A second, tested image added persistent BMM350 startup diagnostics. All
+142,372 payload bytes matched readback before restart. In a 12-second capture:
+
+```text
+MAG_STATUS,0
+MAG_HEALTH,enabled=1,initialized=0,healthy=0,stage=2,result=-3,chip_id=0,id14=-1,id15=-1,bus_errors=1,last_reg=126,status=0,samples=0
+```
+
+The configured I2C2 bus is PB10/SCL and PB11/SDA. Bosch initialization's first
+write to command register `0x7E` failed at configured address `0x14`; separate
+read-only CHIP_ID probes failed at both `0x14` and `0x15`. This establishes a
+communication failure on that bus, not the electrical cause. `chip_id=0` here
+is an unfilled initialization field, **not a successful read of a zero ID**.
+The probe values `-1` explicitly identify failed register transfers. The
+sensor's expected chip ID is `0x33` (decimal 51).
+
+The board remains on the BMM350-enabled diagnostic `v2` image with
+`armed=0,flight_enabled=0`; both BMI270s and BMP581 remained healthy. Default
+`pio run` still selects the magnetometer-disabled `v2_bmi270` profile. The
+complete Windows host suite passed, including eight new BMM350 diagnostics
+checks against the real Bosch API; the ARM build passed. GUI files were not
+changed during this sensor check. Raw captures, readback images, checksums and
+the original backup are retained locally in
+`build-tools/bmm350-check-2026-10-08/` beside the source checkout.
+
+### ER8 wiring and live reception, later on 2026-10-08
+
+ER8 TX was initially connected to the FC's `MCU_TX_PI_RX` output. With the
+receiver bound, USB still showed `receiving=0,frames_ok=0,telem_tx=0`. After the
+user corrected the wiring to ER8 TX → `MCU_RX_PI_TX` (J2 pin 2) and ER8 RX →
+`MCU_TX_PI_RX` (J2 pin 3), a 12-second capture contained 120 USB channel reports.
+Across the first/last CRSF status snapshots, valid frames increased by 5,773
+and transmitted telemetry by 259, with no new CRC errors or resyncs. Uplink LQ
+was 100%, RSSI -14 dBm and SNR 9–10 dB. All 16 channels decoded; CH3 was 989 us,
+CH5/CH7 were 1000 us. State was MANUAL, disarmed, failsafe clear and motors
+inhibited. The GUI's Receiver page displayed the real incoming values.
+
+This verifies FC reception and outgoing serial telemetry counters; handset
+sensor reception and physical surface/motor response were not measured.
+
+### Build profiles
+
 Use `pio run` or `pio run -e v2_bmi270`. BMI270 is the only IMU implementation.
 The default profile disables magnetometer polling (`FC_MAG_ENABLED=0`) and
 inhibits both motors (`FC_FLIGHT_ENABLED=0`). The optional `v2` profile also uses
 BMI270, with BMM350 support enabled. Sensor transforms, control selection,
 failsafe behavior and motor gates have not been changed by this update.
+
+`v2_flight` is an explicit alias of the full motor-enabled `v2_motor_test`
+application. It enables CH5 motor authorization while preserving low-throttle
+arming, CH5 edge requirements, link-loss handling and fault inhibits. Bench
+and flight images use the same controllers and sensors; this is not a switch
+from simulated control to real control. The user selected the motor-enabled
+image for subsequent aircraft checks on 2026-10-08.
 
 Each BMI270 has its own Bosch device state and SPI bus. Initialization uses
 1 MHz SPI and the vendored Bosch API, including SPI selection/reset, the full

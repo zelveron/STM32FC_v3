@@ -16,14 +16,13 @@ import struct
 import subprocess
 import sys
 import tarfile
-import tkinter
 import urllib.request
 import zipfile
 
 REPO = Path(__file__).resolve().parents[1]
 ASSETS = REPO / "build/gui-assets"
 DOWNLOADS = REPO / "build/gui-downloads"
-RELEASE = "2026.10.08"
+RELEASE = "2026.10.08-modern"
 # Original publisher archives, including the exact libusb revision documented
 # in dfu-util's README-bin.txt (not the older libusb 1.0.24 release tarball).
 ARCHIVES = {
@@ -40,6 +39,18 @@ ARCHIVES = {
         "https://raw.githubusercontent.com/pyserial/pyserial/v3.5/LICENSE.txt",
         "f91cb9813de6a5b142b8f7f2dede630b5134160aedaeaf55f4d6a7e2593ca3f3"),
 }
+
+QT_SOURCES = {
+    "qtbase": "56001b905601bb9023d399f3ba780d7fa940f3e4861e496a7c490331f49e0b80",
+    "qtsvg": "35eb516460f00f264eb504baa253432384351cf23fb9980a5857190e8deef438",
+    "qtimageformats": "049bfb99845e4801672aca07c3c4fc4c140f932a3a33faa899419579e33ef1c8",
+    "qttranslations": "c3c61d79c3d8fe316a20b3617c64673ce5b5519b2e45535f49bee313152fa531",
+    "pyside-setup": "d2c896f7f1a6a7ea4c9f98cfe317272fd139703ddf612b86999f09e48aeef0e6",
+}
+for module, digest in QT_SOURCES.items():
+    filename = f"{module}-everywhere-src-6.8.3.tar.xz"
+    base = "https://master.qt.io/official_releases/QtForPython/pyside6/PySide6-6.8.3-src/" if module == "pyside-setup" else "https://master.qt.io/archive/qt/6.8/6.8.3/submodules/"
+    ARCHIVES[filename] = (base + filename, digest)
 
 
 def sha256(path):
@@ -85,8 +96,26 @@ def prepare():
         shutil.copy2(archive(name), sources / name)
     member(archive("libusb-1a90627.tar.gz"), "libusb-1a90627/COPYING", licenses / "libusb-LGPL-2.1.txt")
     shutil.copy2(Path(sys.base_prefix) / "LICENSE.txt", licenses / "Python-LICENSE.txt")
-    tcl_path = Path(tkinter.Tcl().eval("info library"))
-    shutil.copy2(tcl_path.parent / "tk8.6/license.terms", licenses / "Tcl-Tk-license.terms")
+    # Include exact Qt/PySide release sources alongside the portable package.
+    # Extract license/attribution files only, validating every output path.
+    obsolete = licenses / "Tcl-Tk-license.terms"
+    if obsolete.is_file(): obsolete.unlink()
+    for module in QT_SOURCES:
+        filename = f"{module}-everywhere-src-6.8.3.tar.xz"
+        source = archive(filename)
+        shutil.copy2(source, sources / filename)
+        with tarfile.open(source) as tar:
+            for entry in tar.getmembers():
+                relative = Path(*Path(entry.name).parts[1:])
+                if not entry.isfile() or not relative.parts:
+                    continue
+                if not (relative.name.lower().startswith(("license", "copying")) or relative.name == "qt_attribution.json" or relative.parts[0] == "LICENSES"):
+                    continue
+                destination = licenses / module / relative
+                if not destination.resolve().is_relative_to((licenses / module).resolve()):
+                    raise RuntimeError("Unsafe source archive path")
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(tar.extractfile(entry).read())
     # pySerial's 3.5 wheel omits its license; fetch the exact tagged copy.
     shutil.copy2(archive("pyserial-3.5-LICENSE.txt"), licenses / "pyserial-LICENSE.txt")
     for package in ("pyinstaller",):
@@ -103,15 +132,17 @@ def prepare():
                      REPO / "tools/build_gui.py", REPO / "tools/STM32FC-GUI.spec",
                      REPO / "docs/GUI_WINDOWS.md", REPO / "docs/GUI_THIRD_PARTY.txt",
                      REPO / "tests/gui_parser.py", REPO / "tests/gui_connection.py",
-                     REPO / "tests/dfu_helper.py"]:
+                     REPO / "tests/gui_ui.py", REPO / "tests/dfu_helper.py"]:
             if path.is_file():
                 z.write(path, path.relative_to(REPO))
     info = {"release": RELEASE, "source_commit": subprocess.check_output(
                 ["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip(), "platform": "Windows x64", "python": platform.python_version(),
-            "packages": {p: metadata.version(p) for p in ("pyinstaller", "pyinstaller-hooks-contrib", "pyserial")},
+            "source_dirty": bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=REPO, text=True).strip()),
+            "packages": {p: metadata.version(p) for p in ("pyinstaller", "pyinstaller-hooks-contrib", "pyserial", "PySide6-Essentials", "shiboken6")},
             "vendor_archives": {n: {"url": u, "sha256": h} for n, (u, h) in ARCHIVES.items()},
             "vendor_files": {p.name: sha256(p) for p in vendor.iterdir()},
-            "gui_sha256": sha256(REPO / "tools/gui.py")}
+            "gui_sha256": sha256(REPO / "tools/gui.py"),
+            "gui_files": {p.name: sha256(p) for p in sorted((REPO / "tools").glob("gui*.py"))}}
     (ASSETS / "build-info.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
 
 

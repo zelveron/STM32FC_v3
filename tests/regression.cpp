@@ -128,6 +128,7 @@ const estimation::ImuSample& latest(){static estimation::ImuSample s{};return s;
 }
 namespace mag350 {
 bool begin(){return true;} bool poll(Sample&){return false;} bool healthy(){return false;}
+const Diagnostics& diagnostics(){static Diagnostics d{};return d;}
 }
 int failures=0,checks=0;
 void check(const char* name,bool condition) {

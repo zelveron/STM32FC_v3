@@ -4,7 +4,7 @@ Custom flight-controller firmware for RC fixed-wing aircraft, targeting the **ma
 
 **v3 is the software repository generation; v2.2 is the PCB revision.** PlatformIO profiles retain their `v2` names to identify that board. This project continues [STM32FC_v2](https://github.com/zelveron/STM32FC_v2); older board instructions are archived in [docs/history](docs/history/README-v1.md).
 
-> **Development status — 2026-10-08:** BMI270-only firmware; the current USB-powered card has been flashed and readback-verified. IMU 1 produces calibrated data. IMU 2 still fails identification, and BMP581 fails its initial reset write. GNSS communicates but had no position fix during this session. Both motors remain inhibited. See [current bench results](docs/ASSEMBLED_BOARD.md).
+> **Status — 2026-10-08:** Both BMI270s and BMP581 produce healthy data on the current board. ER8 CRSF reception works after correcting the J2 TX/RX wiring; the FC sends attitude, vario and mode telemetry. GNSS has obtained a position fix. BMM350 initialization still fails on I2C2 and remains a hardware investigation item. `v2_flight` is the full MANUAL/ASSIST/TKOFF firmware with CH5 motor authorization; the default build retains motor inhibition. These are bench observations, not flight qualification. See [current results](docs/ASSEMBLED_BOARD.md).
 
 ## Current card — 2026-10-08
 
@@ -12,13 +12,15 @@ The user identified the card connected to the Raspberry Pi as the **BMI270** ass
 
 The BMI270 path runs Bosch's reset/SPI-selection sequence and uploads all 8192 configuration bytes independently to each IMU. Initialization uses 1 MHz SPI, then waits 80 ms after enabling measurement before switching to 5 MHz FIFO service and flushing startup frames. This covers the gyroscope's documented 45 ms startup; without settling, dummy FIFO frames can latch the strict paired-frame parser as failed. See the [Bosch BMI270 datasheet](https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmi270-ds000.pdf), sections 1 and 4.4. Runtime FIFO, freshness, clipping and failover checks remain active.
 
-`IMU_CONFIG` now reports actual BMI270 failure stages and register snapshots: `regsN = CHIP_ID << 16 | INTERNAL_STATUS << 8 | ERR_REG` (hexadecimal, normally `240100`). Initialization errors are `100 - Bosch return code`: `103` means chip ID mismatch and `109` means configuration-load failure. Other codes: 1 SPI setup, 2 power-save setup, 3 configuration read, 4 sensor configuration/enable, 5 FIFO setup, 6 flush, 7 identity/health, 8 FIFO length/backlog, 9 sensor clock, 10 FIFO transfer, 11 paired-frame parsing, 12 clipping. The October 8 software correction restored IMU 1 readings and calibration; IMU 2 still returned chip ID `0x00` instead of `0x24` during the observed session.
+`IMU_CONFIG` reports actual BMI270 failure stages and register snapshots: `regsN = CHIP_ID << 16 | INTERNAL_STATUS << 8 | ERR_REG` (hexadecimal, normally `240100`). Initialization errors are `100 - Bosch return code`: `103` means chip ID mismatch and `109` means configuration-load failure. Other codes: 1 SPI setup, 2 power-save setup, 3 configuration read, 4 sensor configuration/enable, 5 FIFO setup, 6 flush, 7 identity/health, 8 FIFO length/backlog, 9 sensor clock, 10 FIFO transfer, 11 paired-frame parsing, 12 clipping. Earlier IMU 2/BMP581 failures are retained in the dated bench record; both devices were healthy in the later Windows checks. `MAG_HEALTH` preserves BMM350 startup errors and identity-probe results continuously.
 
 The GUI now separates GNSS communication from navigation status. Firmware emits `GPS_HEALTH` every second, including after the initial bring-up period: `rx` (recent UART bytes), `nmea` (recent checksum-valid sentences), `fix`, `used` (fresh GGA satellites used, `-1` unknown), `visible` (fresh GSV: `-1` unknown, `0` none reported, `1` satellites in view), `baud`, cumulative `bytes` and `messages`. A missing fix no longer hides receiver communication or GGA satellite counts. Positive GSV evidence is retained for five seconds so an empty report from another constellation cannot immediately erase it. Stale controller telemetry is displayed separately from a silent GNSS receiver.
 
 ## Windows GUI
 
-Download the [standalone Windows x64 EXE](https://github.com/zelveron/STM32FC_v3/releases/download/gui-2026.10.08/STM32FC-GUI.exe) from [GitHub Releases](https://github.com/zelveron/STM32FC_v3/releases). Python, serial support and DFU utilities are bundled. The GUI shows individual BMI270 failure stages and distinguishes missing GNSS communication from no satellites/no position fix. See the [Windows guide](docs/GUI_WINDOWS.md) for connection, driver requirements and reproducible packaging.
+The current source includes a modern Qt ground station with five pages: **Flight deck, Receiver, Sensors, Diagnostics and System**. It provides a 3D aircraft view, artificial horizon, offline GPS ground track, speed/altitude/climb, satellite and component indicators, all 16 RC channels, eight PWM commands, sensor diagnostics and a searchable telemetry table. Explicit **Preview** mode works without hardware and cannot send commands. Stale or invalid telemetry clears live instruments; last raw values remain available with their ages.
+
+Download the [standalone Windows x64 EXE](https://github.com/zelveron/STM32FC_v3/releases/download/gui-2026.10.08-modern/STM32FC-GUI.exe) or the [complete portable ZIP](https://github.com/zelveron/STM32FC_v3/releases/download/gui-2026.10.08-modern/STM32FC-GUI-2026.10.08-modern-Windows-x64.zip) from the [modern ground-station release](https://github.com/zelveron/STM32FC_v3/releases/tag/gui-2026.10.08-modern). Python, Qt, serial support and DFU utilities are bundled. The target is **Windows 10/11 x64**, with no separately installed Python or Qt required; operating-system USB drivers remain separate. See the [Windows guide](docs/GUI_WINDOWS.md) for setup, source, licenses and reproducible packaging. Flight and bench firmware downloads are separate, explicitly named release assets; opening the GUI never flashes either image.
 
 For source-based use:
 
@@ -27,7 +29,7 @@ pio run -e v2_bmi270
 python tools/gui.py --port /dev/ttyACM0 --capture bench-session.txt
 ```
 
-On Windows use the appropriate COM port instead. The GUI includes **Enter DFU** and an **All live parameters** diagnostic table; see [DFU instructions](docs/DFU.md).
+On Windows use the appropriate COM port instead. The GUI includes **System → Enter ROM DFU** and a **Diagnostics** table; use `--demo` for the simulated preview. See [DFU instructions](docs/DFU.md).
 
 ## Contents
 
@@ -209,10 +211,10 @@ ER8/ELRS separately generates RSSI, link quality, SNR, antenna, RF mode and powe
 
 Actual refresh depends on ELRS packet rate, telemetry ratio, packet format, reception and EdgeTX. **420000 baud is the wired link rate, not wireless telemetry refresh.** See the [full inventory](docs/TELEMETRY.md) before simplifying streams.
 
-For the USB GUI, use Python 3 with Tkinter; install `pyserial` for serial access and `numpy` for spectrum tools/tests:
+For the USB GUI, use Python 3.12 with PySide6-Essentials and pySerial; `numpy` is used by separate spectrum tools/tests:
 
 ```text
-python -m pip install pyserial numpy
+python -m pip install PySide6-Essentials==6.8.3 pyserial==3.5 numpy
 python tools/gui.py --port COM7
 ```
 
@@ -259,6 +261,7 @@ pio run -e crsf_probe
 | `v2_bmi270` (default) | Current dual-BMI270 card, magnetometer disabled | Motor-inhibited bench firmware; `.pio/build/v2_bmi270/firmware.bin` |
 | `v2` (optional BMM350) | BMI270 development with magnetometer support enabled | `.pio/build/v2/firmware.bin`; `FC_FLIGHT_ENABLED=0`, both ESCs at minimum |
 | `v2_motor_test` | Explicit motor-enabled qualification | `FC_FLIGHT_ENABLED=1`; select only after electrical/motor-disabled checks |
+| `v2_flight` | Full motor-enabled flight firmware | Same application as `v2_motor_test`: MANUAL/ASSIST/TKOFF, CH5 arm, CH7 mode, CRSF/USB and SD logging |
 | `crsf_probe` | Independent UART4/USB diagnostic | Isolates receiver wiring/protocol issues |
 | `native` | Portable module checks | Host executable |
 | `sitl` | Simplified aircraft simulation | Host model, not flight qualification |
@@ -266,7 +269,7 @@ pio run -e crsf_probe
 After electrical repairs and propeller-off acceptance checks, the separate motor-enabled artifact can be built deliberately:
 
 ```text
-pio run -e v2_motor_test
+pio run -e v2_flight
 ```
 
 The flag enables software authorization, not flight readiness. The configured upload protocol is DFU. Building does not flash anything. The current BMI270 card was flashed and readback-verified on 2026-10-08; see [bring-up evidence](docs/ASSEMBLED_BOARD.md).

@@ -1,5 +1,14 @@
 # Validation and acceptance status
 
+Current evidence is in [the 2026-10-08 assembled-board record](ASSEMBLED_BOARD.md).
+The Windows session verified both BMI270s, BMP581, GNSS communication/fix,
+ER8 reception and outgoing CRSF telemetry counters. BMM350 I2C communication
+remains unresolved. The current full host suite and eight BMM350 diagnostics
+checks pass; 40 GUI/parser/serial/DFU tests and real Qt widget/package smoke
+tests pass. `v2_flight` enables motor authorization but does not add flight
+qualification. The September results below are historical; their statements
+about untested hardware and the former Tk GUI describe that date only.
+
 Date: 2026-09-28. Starting revision: `3daf518b5e1759f63fb84008d8d34c5e17c0dda6` from STM32FC_v2. These results cover the firmware carried into STM32FC_v3 for the v2.2 PCB. **No board was flashed, no physical hardware test was performed, and no flight was conducted.**
 
 ## Automated results

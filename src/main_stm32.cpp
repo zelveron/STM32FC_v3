@@ -533,6 +533,19 @@ void task_debug()   // 2 Hz -- low-rate status lines (no blocking calls here)
         L().print(F(",regs1=")); L().println(imu_v2::driver_health_registers(1),HEX);
         L().print(F("BMP_HEALTH,valid=")); L().print(bmp581::healthy()?1:0);
         L().print(F(",error=")); L().println(bmp581::error());
+        const auto& md=mag350::diagnostics();
+        L().print(F("MAG_HEALTH,enabled=")); L().print(config::enable_magnetometer?1:0);
+        L().print(F(",initialized=")); L().print(md.initialized?1:0);
+        L().print(F(",healthy=")); L().print(mag350::healthy()?1:0);
+        L().print(F(",stage=")); L().print(md.stage);
+        L().print(F(",result=")); L().print(int(md.result));
+        L().print(F(",chip_id=")); L().print(md.chip_id);
+        L().print(F(",id14=")); L().print(md.id14);
+        L().print(F(",id15=")); L().print(md.id15);
+        L().print(F(",bus_errors=")); L().print(md.bus_errors);
+        L().print(F(",last_reg=")); L().print(md.last_error_register);
+        L().print(F(",status=")); L().print(md.status);
+        L().print(F(",samples=")); L().println(md.samples);
         // Continuous health even with no fix/no receiver and for late GUI joins.
         L().print(F("GPS_HEALTH,rx=")); L().print(ublox::receiving()?1:0);
         L().print(F(",nmea=")); L().print(ublox::nmea_valid()?1:0);

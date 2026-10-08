@@ -46,11 +46,18 @@ Power controls are real on this board: **PA15 LOW enables BMP power through Q2; 
 
 J2 was originally labeled for Raspberry Pi use; the user assigned it to the ER8.
 
-| J2 pin | FC signal | Connect to ER8 |
-|---|---|---|
-| 1 | GND | GND |
-| 2 | PA1 / UART4 RX | **TX** on dedicated serial connector |
-| 3 | PA0 / UART4 TX | **RX** on dedicated serial connector |
+| J2 pin | PCB label | FC signal | Connect to ER8 |
+|---|---|---|---|
+| 1 | GND | GND | GND |
+| 2 | `MCU_RX_PI_TX` | PA1 / UART4 RX | **TX** on dedicated serial connector |
+| 3 | `MCU_TX_PI_RX` | PA0 / UART4 TX | **RX** on dedicated serial connector |
+
+The `PI` part is the original Raspberry Pi naming. Read the **MCU** portion
+to identify the controller's direction: ER8 TX connects to **MCU_RX**, and
+ER8 RX connects to **MCU_TX**. Power down before changing the wires. The first
+signal carries receiver channels into the FC; the second carries FC telemetry
+back through ER8 to the transmitter. A bound radio/receiver link does not prove
+either serial direction works. TX plus ground alone cannot return FC telemetry.
 
 **J2 carries no power.** Feed ER8 from an appropriate regulated supply and join grounds. ER8 accepts 4.5-8.4 V at its power input and has a dedicated CRSF connector; use its labels/manual to identify pins, not guessed cable colors. The separate EXT voltage-sense connection is not the receiver power input. See [RadioMaster ER8 specifications](https://radiomasterrc.com/products/er8-2-4ghz-elrs-pwm-receiver).
 

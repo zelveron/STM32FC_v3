@@ -1,4 +1,6 @@
-# Windows x64, Python 3.12.14 used for the 2026-10-05 release.
+# Windows x64, Python 3.12.14 used for the modern ground station.
+PySide6-Essentials==6.8.3
+shiboken6==6.8.3
 pyinstaller==6.22.3
 pyinstaller-hooks-contrib==2026.8
 pyserial==3.5

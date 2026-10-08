@@ -1,117 +1,143 @@
-# STM32FC GUI for Windows
+# STM32FC Ground Station
 
-Release **2026.10.08**, for **Windows 10/11 on x64 (Intel/AMD)**.
+Modern desktop revision **2026.10.08-modern**, for **Windows 10/11 x64 (Intel/AMD)**.
 
-Double-click **STM32FC-GUI.exe**. Python, Tcl/Tk, pySerial, dfu-util and libusb
-are included. No Python, pip, PlatformIO, internet connection or administrator
-launch is needed to use the GUI. The EXE can run by itself from any writable
-local folder; first startup can take a few seconds while it unpacks its runtime
-into Windows' temporary folder. Keep the portable ZIP's licenses and source
-archives when sharing the distribution.
+Double-click **STM32FC-GUI.exe**. Python, Qt 6, PySide6, serial support and the
+DFU utility are bundled. No Python installation, browser, internet connection
+or administrator launch is needed. First startup takes a few seconds while
+the application unpacks into Windows' temporary directory. Keep the portable
+ZIP's `licenses/` and `sources/` when redistributing it.
 
-This Windows build does not run on macOS, Linux or 32-bit Windows. Windows ARM
-emulation and older Windows versions have not been qualified. The current
-release is unsigned; no signing certificate is configured.
+This build is unsigned. macOS, Linux, 32-bit Windows and Windows ARM are not
+qualified by this Windows package. The source GUI requires PySide6-Essentials
+6.8.3 and pySerial 3.5 on a platform supported by those packages.
 
-## Connect and view data
+## Connect
 
-1. Close other dashboards/serial monitors using the board's COM port.
-2. Run the EXE and plug the controller into USB. **Auto-detect STM32** connects
-   when exactly one `0483:5740` board is present, including if plugged in later.
-3. For several boards, click **Refresh ports**, select the correct COM port,
-   then **Reconnect**. Reconnect releases the previous serial handle first.
-4. Scroll to see flight mode, arming/failsafe, calibration, both IMU health,
-   roll/pitch/yaw, raw IMU data, barometer, GPS, RC, outputs, SD/USB counters and
-   the **All live parameters** table. The table retains the last raw values;
-   check connection/freshness before interpreting them.
+1. Close other dashboards or serial monitors using the controller.
+2. Open the EXE. **Auto-detect STM32** connects when exactly one normal USB
+   controller (`0483:5740`) is present, including after it is plugged in later.
+3. For multiple boards, use **↻**, select the correct COM port, then
+   **Reconnect**. The old reader must close before a new connection starts.
+4. Choose a page in the sidebar. **Disconnect** stops the reader and preserves
+   the last diagnostic values with stale labels. Reconnection starts a fresh
+   session so data from two boards cannot be mixed.
 
-The monitor uses our v3 tagged-CSV firmware protocol. The earlier 0.3.1 JSON
-sensor firmware requires the matching v3 firmware before this GUI can display
-its data. A missing sensor/GPS fix/receiver is a board or signal status, not a
-missing PC dependency. Yaw is relative on the assembled board without a
-magnetometer.
+**Preview** opens a clearly marked simulation, releases the real serial port,
+and disables recording and DFU. **Exit preview** clears all simulated data and
+attempts a real connection. Preview never sends commands to hardware.
 
-## Sensor diagnostics
+## Pages and displayed data
 
-- BMI270 #1 and #2 each show a driver stage. Code 103 means the chip ID did not
-  match 0x24; code 109 means the 8192-byte configuration image failed to load.
-  The header identifies healthy sensors and the selected source. Raw accel/gyro
-  values are from the selected IMU. One usable IMU is shown in amber because
-  redundancy is unavailable.
-- BMP581 reports whether initialization, register access or sample reads failed.
-  A failed reset write means communication has not been established; it does
-  not determine whether the underlying cause is a NACK or timeout.
-- GNSS **Communication OK** requires recent checksum-valid NMEA sentences.
-  **No GNSS data received** and **Bytes received · no valid NMEA** are distinct.
-  With communication working, the fix row distinguishes no satellites reported
-  in view, satellites in view without a fix, and unknown satellite visibility.
-  **Satellites used** is the fresh GGA count, including zero without a fix.
-- Lost controller telemetry expires health/status displays instead of leaving
-  old green statuses visible. The raw diagnostic table remains a last-value log.
+| Page | Contents |
+| --- | --- |
+| Flight deck | Artificial horizon, shaded 3D aircraft, roll/pitch/relative yaw, active/requested mode, GPS ground speed, relative barometric altitude, climb, satellites used, position, GPS altitude/UTC, offline north-up ground track, eight component indicators, arming/failsafe/motor authorization/assist lockout/integrator state |
+| Receiver | All 16 CRSF input channels, eight commanded PWM outputs, uplink LQ/RSSI/SNR, valid-frame count, CRC errors/resyncs, telemetry queue count and raw RF-mode enumeration |
+| Sensors | Each BMI270's health/driver error/register snapshot, selected source, dual-IMU disagreement, BMP581 error/pressure/temperature/pressure altitude, GNSS communication/satellite state, filtered selected-IMU acceleration/angular rate, gyro calibration/bias/gravity trust, BMM350 field values, SD status/drop counters and rolling attitude history |
+| Diagnostics | Every received tagged message and scheduler task, searchable fields, update age, recent/stale state and local JSON snapshot export |
+| System | Connection/capture state, message and drop counts, recent session/mode events and ROM DFU maintenance |
 
-## DFU and USB drivers
+Status colors are green for current healthy data, amber for degraded/missing
+fresh samples, red for a reported failure or lost link, and gray for offline,
+waiting or firmware-disabled devices. Hover over an indicator for details.
+Inactive SD logging does not prove the SD card is missing. Individual IMU
+indicators do not imply both IMUs are feeding the estimator simultaneously.
 
-**Enter DFU** requests the existing ground-maintenance command and verifies
-`0483:df11` using the bundled dfu-util. The flight application and PWM stop in
-ROM DFU. Use it only on the ground with propulsion disconnected, CH5 disarmed
-and throttle low. Firmware enforces its disarm/idle gates. The GUI does not
-select, erase or flash a firmware image. After programming/restarting the
-board, choose **Auto-detect STM32** and **Reconnect** (or select its new COM
-number with Refresh ports).
+## Interpreting the instruments
 
-The EXE includes all application dependencies, **not Windows USB drivers**.
-Normal CDC monitoring uses Windows' USB serial driver. DFU enumeration needs
-a compatible WinUSB/libusb driver for the ROM `0483:df11` interface. An existing
-ST driver association may need adjustment on a new PC. Installing a driver is
-a separate administrator operation; the GUI never changes drivers or system
-settings. A serial disconnect alone is never reported as successful DFU.
+- Body axes are forward/right/down. Positive roll is right wing down; positive
+  pitch is nose up. The aircraft uses the same roll/pitch/yaw rotation as the
+  attitude values. An invalid estimator blanks both attitude instruments.
+- **Yaw is relative, not a magnetic heading.** The current firmware does not
+  fuse BMM350 into heading, even when magnetic samples are available.
+- **GPS ground speed is not airspeed.** The track is a local offline plot,
+  without map tiles, terrain or waypoint navigation. Last track points remain
+  gray when there is no current position fix.
+- Relative barometric altitude uses the firmware's reference pressure. It is
+  not measured clearance over terrain. GPS altitude is separately labeled MSL.
+- Satellites used come from fresh GGA. Visibility is only unknown / none
+  reported / satellites in view; firmware does not expose a total in-view count.
+- RC bars require a receiving CRSF status as well as recent channels. The
+  firmware may keep publishing cached channels after receiver-link loss.
+- PWM values are **commands**, not measured servo position or confirmation
+  that the ESC/servo accepted them. Radio telemetry counters are not handset
+  acknowledgements. RF-mode names depend on ELRS radio firmware, so the raw
+  enumeration is shown.
+- USB provides one selected IMU signal set; it does not provide two independent
+  raw IMU streams. The GUI shows each IMU's health separately.
+
+High-rate attitude/IMU/barometer values expire after 0.35 seconds, RC/PWM/mag
+after 0.5 seconds, mode/link after 1.5 seconds, GPS after 2.5 seconds, and most
+health messages after 3 seconds. SD status has a 12-second allowance for its
+5-second reporting interval. Raw diagnostics retain last values and their ages.
+The GUI refreshes at up to 20 Hz; this does not change firmware or RF rates.
+
+The GUI expects the v3 tagged-CSV protocol. Earlier 0.3.1 JSON sensor firmware
+needs its matching dashboard or a deliberate firmware update.
+
+## Recording and diagnostics
+
+**Record USB** saves incoming tagged CSV locally. Changing recording restarts
+the serial session. Disk errors stop recording, report a session event and
+leave live telemetry running. **Export diagnostic snapshot** saves the latest
+raw lines, ages, connection state and whether the data was simulated.
+
+BMI270 code 103 means chip ID mismatch (expected `0x24`); code 109 means the
+configuration image failed to load. BMP581 reset-write failure identifies
+the failed driver stage, not its underlying electrical cause. GNSS byte
+reception, valid NMEA, satellite visibility and position fix are distinct.
+
+Unexpected errors are shown and logged to
+`%LOCALAPPDATA%\STM32FC-GUI\error.log` when writable.
+
+## DFU and drivers
+
+In **System → Enter ROM DFU**, confirm ground use with propulsion disconnected,
+CH5 disarmed and throttle low. ROM DFU stops the flight application,
+stabilization and PWM. The GUI releases its serial reader, sends the existing
+maintenance command and verifies `0483:df11` with bundled dfu-util. It does not
+select, erase or flash a firmware image. A serial disconnect alone is never
+reported as successful DFU. After a board restart, use **Reconnect**.
+
+The EXE bundles application dependencies, not operating-system USB drivers.
+Normal monitoring uses Windows USB serial support; ROM DFU needs an appropriate
+WinUSB/libusb driver. The GUI does not install drivers or change system settings.
 
 ## Optional commands
 
 ```powershell
+.\STM32FC-GUI.exe --demo
 .\STM32FC-GUI.exe --port COM6
-.\STM32FC-GUI.exe --capture "C:\Logs\bench-session.txt"
+.\STM32FC-GUI.exe --capture "C:\Logs\bench-session.csv"
 ```
 
-Create the capture directory first. Unexpected GUI errors are displayed and
-logged to `%LOCALAPPDATA%\STM32FC-GUI\error.log` where possible. Connection
-errors appear in the footer; close any other app holding that COM port.
+Create the capture directory first. There is no cloud upload.
 
-## Rebuild from source
+## Rebuild and verify
 
-Only the build computer needs Python **3.12 x64 with Tkinter**, pip and an
-internet connection for initial downloads. Run from the repository root:
+Use Python 3.12 x64 on Windows. Only the build needs internet for dependencies
+and the initial verified vendor downloads:
 
 ```powershell
 py -3.12 -m venv build\gui-venv
 .\build\gui-venv\Scripts\python.exe -m pip install -r tools\gui-requirements.txt
+.\build\gui-venv\Scripts\python.exe tests\gui_parser.py
+.\build\gui-venv\Scripts\python.exe tests\gui_connection.py
+.\build\gui-venv\Scripts\python.exe tests\gui_ui.py
+.\build\gui-venv\Scripts\python.exe tests\dfu_helper.py
 .\build\gui-venv\Scripts\python.exe tools\build_gui.py --onedir
 .\build\gui-venv\Scripts\python.exe tools\build_gui.py
 ```
 
-`tools/STM32FC-GUI.spec` bundles the runtime and verified vendor binaries. The
-build script fetches official archives, checks pinned SHA256 hashes, includes
-licenses and corresponding DFU/libusb source, and writes:
+Outputs are `dist/STM32FC-GUI.exe`, its SHA256 file and
+`dist/STM32FC-GUI-2026.10.08-modern-Windows-x64.zip`. The optional folder build is
+`build/gui-onedir/STM32FC-GUI/`. The ZIP also includes editable GUI source,
+Qt/PySide/DFU/libusb source archives, notices and a build manifest with the base
+commit, dirty-worktree flag and hashes of all GUI Python modules. Version
+fields live in `tools/build_gui.py` and `tools/gui-version.txt`.
 
-- `dist/STM32FC-GUI.exe` — standalone, windowed application.
-- `dist/STM32FC-GUI-2026.10.08-Windows-x64.zip` — EXE, quick start, checksums,
-  build metadata, third-party notices and source archives.
-- `dist/STM32FC-GUI.exe.sha256` — integrity checksum.
-
-The optional folder build is under `build/gui-onedir/STM32FC-GUI/`. Downloads
-are cached under `build/gui-downloads/`. Release version fields live in
-`tools/build_gui.py` and `tools/gui-version.txt`. The build recipe is repeatable;
-byte-identical EXEs across different build machines are not promised.
-
-The repository also includes `.github/workflows/build-gui.yml`, which builds on
-Windows x64, tests the source and packaged application, and uploads the EXE,
-portable ZIP, checksums and smoke-test report as a workflow artifact.
-
-## Validation
-
-Run `tests/gui_parser.py`, `tests/gui_connection.py` and `tests/dfu_helper.py`
-with the build venv's Python. The packaged application also has a read-only
-smoke test:
+The package smoke test renders all five Qt pages, validates preview/fault/
+disconnect behavior, checks bundled imports and enumerates USB using dfu-util:
 
 ```powershell
 $p = Start-Process .\dist\STM32FC-GUI.exe -ArgumentList '--self-test "C:\Temp\gui-check.json"' -PassThru -Wait
@@ -119,8 +145,6 @@ $p.ExitCode
 Get-Content C:\Temp\gui-check.json
 ```
 
-It creates real Tk widgets, checks sample parsing, imports bundled pySerial,
-executes the bundled DFU binary and enumerates USB. It **does not open a serial
-port, send DFU commands or flash**. The report records bundle paths, versions
-and success/failure. Local package verification is not testing on every
-Windows configuration or flight qualification.
+It does not open a serial port, send commands or flash. The Windows build
+workflow runs the source regressions and packaged smoke test. These checks
+validate the desktop software, not flight behavior or every Windows machine.

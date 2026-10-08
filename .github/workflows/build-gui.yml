@@ -30,6 +30,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'GUI parser tests failed' }
           python tests/gui_connection.py
           if ($LASTEXITCODE -ne 0) { throw 'GUI connection tests failed' }
+          python tests/gui_ui.py
+          if ($LASTEXITCODE -ne 0) { throw 'GUI lifecycle/rendering tests failed' }
           python tests/dfu_helper.py
           if ($LASTEXITCODE -ne 0) { throw 'DFU helper tests failed' }
       - name: Test portable firmware modules

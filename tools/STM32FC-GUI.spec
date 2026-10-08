@@ -11,8 +11,9 @@ a = Analysis(
     binaries=[(str(assets / "vendor/dfu-util" / name), "vendor/dfu-util")
               for name in ("dfu-util.exe", "libusb-1.0.dll")],
     datas=[(str(assets / "licenses"), "licenses"),
-           (str(assets / "sources"), "sources"),
-           (str(assets / "build-info.json"), ".")],
+           (str(assets / "build-info.json"), ".")] +
+          [(str(p), "sources") for p in (assets / "sources").iterdir()
+           if p.is_file() and "everywhere-src" not in p.name],
     hiddenimports=[], hookspath=[], hooksconfig={}, runtime_hooks=[],
     excludes=[], noarchive=False,
 )

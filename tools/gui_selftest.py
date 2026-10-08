@@ -1,53 +1,55 @@
-"""Read-only package smoke test; never sends serial commands or changes firmware."""
+"""Read-only package smoke test; never opens a serial port or changes firmware."""
 import json
 from pathlib import Path
 import platform
 import subprocess
 import sys
 import traceback
-import tkinter as tk
-
+from unittest.mock import patch
 import serial
+from PySide6 import __version__ as pyside_version
+from PySide6.QtCore import qVersion
+from PySide6.QtWidgets import QApplication
 from enter_dfu import find_dfu_util, dfu_list
 
 
 def run(report_path):
     report = {"ok": False, "frozen": bool(getattr(sys, "frozen", False)),
               "python": platform.python_version(), "architecture": platform.machine(),
-              "pyserial": serial.__version__, "serial_module": serial.__file__}
-    root = None
+              "pyserial": serial.__version__, "serial_module": serial.__file__,
+              "pyside": pyside_version, "qt": qVersion()}
+    window = None
+    application = QApplication.instance() or QApplication([])
     try:
-        from gui import MonitorApp
-        root = tk.Tk()
-        root.withdraw()
-        app = MonitorApp(root, start_reader=False)
-        app._handle_line("IMU_CONFIG,model=BMI270,mag=0,error0=0,error1=0")
-        app._handle_line("IMU_HEALTH,1,1,0,0,1")
-        app._handle_line("ATT,10,5,90")
-        app._handle_line("BMP,1013.25,20,100")
-        app._handle_line("GPS_HEALTH,rx=1,nmea=1,fix=0,used=0,visible=0,baud=9600")
-        root.update_idletasks()
-        assert "BMI270 · #1 OK · #2 OK" in app.status_var.get()
-        assert "+10.0" in app.roll_var.get()
-        assert "1013.250" in app.pressure_var.get()
-        assert "Communication OK" in app.gps_link_var.get()
-        assert "no satellites" in app.fix_var.get()
-        app._handle_line("IMU_CONFIG,model=BMI270,mag=0,error0=0,error1=103,regs0=240100,regs1=0")
-        app._handle_line("IMU_HEALTH,1,0,0,0,1")
-        app._handle_line("BMP_HEALTH,valid=0,error=2")
-        root.update_idletasks()
-        assert "Chip ID mismatch" in app.imu2_diag_var.get()
-        assert "#2 unavailable" in app.status_var.get()
-        assert "communication not established" in app.bmp_health_var.get()
-        assert app.diag_tree.get_children()
-        assert not app.reader.is_alive()
-        report["tk"] = root.tk.call("info", "patchlevel")
-        report["widgets_and_parser"] = "passed; no serial port opened"
+        from gui_controller import MonitorApp
+        with patch("gui_transport.serial.Serial", side_effect=AssertionError("Self-test must not open serial")):
+            window = MonitorApp(start_reader=False, demo=True)
+            window.timer.stop()
+            window.poll()
+            assert window.metrics["mode"].value.text() == "ASSIST"
+            assert window.model.attitude() is not None
+            assert window.model.position() is not None
+            assert not window.dfu_button.isEnabled()
+            assert not window.session.running()
+            assert "SIMULATED" in window.banner.text()
+            window.show()
+            for page in range(5):
+                window.select_page(page)
+                application.processEvents()
+                assert not window.grab().isNull()
+            window.model.feed("IMU_CONFIG,model=BMI270,mag=0,error0=0,error1=103,regs0=240100,regs1=0")
+            window.model.feed("IMU_HEALTH,1,0,0,0,1")
+            window.model.feed("BMP_HEALTH,valid=0,error=2")
+            window.render()
+            assert "Chip ID mismatch" in window.sensor_details["imu2"].text()
+            assert "communication not established" in window.sensor_details["baro"].text()
+            window.request_transition("disconnect")
+            assert window.model.received == 0
+            assert window.metrics["speed"].value.text() == "—"
+        report["widgets_and_parser"] = "Five Qt pages rendered; preview/fault/disconnect checks passed; no serial port opened"
         utility = find_dfu_util()
         report["dfu_util"] = utility
         if report["frozen"]:
-            # Windows may spell the same temporary directory using an 8.3
-            # alias (RUNNER~1) or its long name. Compare canonical paths.
             bundle = Path(sys._MEIPASS).resolve()
             assert Path(utility).resolve().is_relative_to(bundle)
             assert Path(serial.__file__).resolve().is_relative_to(bundle)
@@ -63,7 +65,7 @@ def run(report_path):
     except Exception:
         report["error"] = traceback.format_exc()
     finally:
-        if root is not None:
-            root.destroy()
+        if window is not None:
+            window.close()
     Path(report_path).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return 0 if report["ok"] else 1
