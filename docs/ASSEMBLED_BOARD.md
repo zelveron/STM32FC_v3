@@ -37,7 +37,7 @@ is an unfilled initialization field, **not a successful read of a zero ID**.
 The probe values `-1` explicitly identify failed register transfers. The
 sensor's expected chip ID is `0x33` (decimal 51).
 
-The board remains on the BMM350-enabled diagnostic `v2` image with
+After this check, the board was left on the BMM350-enabled diagnostic `v2` image with
 `armed=0,flight_enabled=0`; both BMI270s and BMP581 remained healthy. Default
 `pio run` still selects the magnetometer-disabled `v2_bmi270` profile. The
 complete Windows host suite passed, including eight new BMM350 diagnostics
@@ -61,7 +61,39 @@ inhibited. The GUI's Receiver page displayed the real incoming values.
 This verifies FC reception and outgoing serial telemetry counters; handset
 sensor reception and physical surface/motor response were not measured.
 
-### Build profiles
+### Published flight image programmed, 2026-10-08
+
+After publishing release `gui-2026.10.08-modern`, the user explicitly requested
+the full motor-enabled flight firmware. The exact published
+`STM32FC-v3-flight-v2.2.bin` from source revision
+`11676b227a38e36740699cdb4a38a56982f69db7` was flashed through ROM DFU. Its SHA256
+is `6971b8b7fecd3feef2129c8e48c04fdb10c270ace680e517fc6033e8e128bf4d`.
+The previous complete 1 MiB flash was backed up and all **142,476 programmed
+payload bytes** matched readback before restart.
+
+The subsequent 16-second USB capture confirmed:
+
+- `flight_enabled=1,armed=0,failsafe=0,timing_fault=0`, MANUAL requested/active.
+- CH3 throttle 989 us, CH5 1000 us; both ESC commands 1000 us while disarmed.
+- Both BMI270s healthy, no driver errors, and gyro calibration ready.
+- BMP581 healthy; ER8 receiving with LQ 100%, valid channels and increasing
+  outgoing telemetry. No additional CRC errors during the observed window.
+- GNSS communicating with valid NMEA at 9600 baud, but no fix in this window.
+- BMM350's previously reported I2C startup failure unchanged; SD log inactive.
+
+This is the full flight application with CH5 motor authorization, not a
+simulation. Motors were not armed or run as part of this verification. Servo
+response, RF-loss behavior on the aircraft, SD-card timing and flight behavior
+remain separate physical acceptance work. The standalone Windows GUI was
+reopened on COM6. Local evidence and the backup are in
+`build-tools/flight-release-2026-10-08/` beside the checkout.
+
+The release EXE also passed a standalone test from an independent Unicode path
+with Python/Qt development environment paths removed. GitHub's Windows GUI
+workflow passed for the release revision. The release packages preserve that
+exact code revision; this later note records the physical programming result.
+
+### Available build profiles
 
 Use `pio run` or `pio run -e v2_bmi270`. BMI270 is the only IMU implementation.
 The default profile disables magnetometer polling (`FC_MAG_ENABLED=0`) and
@@ -90,7 +122,7 @@ not bypass runtime identity, error-register, FIFO, sensor-clock, clipping,
 freshness or dual-sensor disagreement checks. See the [Bosch BMI270 datasheet](https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmi270-ds000.pdf)
 and the pinned vendor provenance in `lib/bmi270/UPSTREAM.md`.
 
-## Observed USB bench results
+## Earlier Raspberry Pi USB bench results
 
 The motor-inhibited image was programmed through ROM DFU. Every programmed
 payload byte was read back and compared; the original 1 MiB flash was saved
@@ -127,14 +159,14 @@ Positive GSV evidence lasts five seconds so an empty report for a different
 constellation cannot immediately erase it. Missing GNSS data, malformed traffic,
 no satellites, no fix and stale controller telemetry are distinct GUI states.
 
-The Windows x64 GUI includes its Python/Tk/serial runtime and DFU utility.
+The current Windows x64 GUI includes its Python/Qt/serial runtime and DFU utility.
 See [Windows packaging](GUI_WINDOWS.md) and [DFU operation](DFU.md).
 
-## Verification
+## Earlier Raspberry Pi verification
 
 On October 8, both ARM profiles (`v2_bmi270` and `v2`) compiled successfully.
-The current-card image is byte-for-byte identical to the readback-verified
-image already flashed: SHA256 (including DFU suffix)
+The image used for that earlier check was byte-for-byte identical to its
+readback-verified image: SHA256 (including DFU suffix)
 `4b4da0d0ad9ff2b225bf1bbd0bebf42505a5731e14190ef5d6c533270209bc1a`.
 The complete GCC host suite passed **299 C/C++ checks**, plus **28 GUI parser
 checks, 2 serial-connection tests and 7 DFU helper tests**. Real Tk widget and
