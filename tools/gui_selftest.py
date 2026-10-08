@@ -46,8 +46,11 @@ def run(report_path):
         utility = find_dfu_util()
         report["dfu_util"] = utility
         if report["frozen"]:
-            assert Path(utility).is_relative_to(Path(sys._MEIPASS))
-            assert Path(serial.__file__).is_relative_to(Path(sys._MEIPASS))
+            # Windows may spell the same temporary directory using an 8.3
+            # alias (RUNNER~1) or its long name. Compare canonical paths.
+            bundle = Path(sys._MEIPASS).resolve()
+            assert Path(utility).resolve().is_relative_to(bundle)
+            assert Path(serial.__file__).resolve().is_relative_to(bundle)
         version = subprocess.run([utility, "--version"], capture_output=True,
                                  text=True, timeout=10,
                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
