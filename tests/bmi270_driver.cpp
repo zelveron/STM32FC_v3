@@ -8,7 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cmath>
-extern const uint8_t bmi270_config_file[];
+extern "C" const uint8_t bmi270_config_file[];
 struct Chip {
     uint8_t regs[128]{};
     std::deque<uint8_t> fifo;
