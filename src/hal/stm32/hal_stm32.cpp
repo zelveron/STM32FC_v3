@@ -118,6 +118,66 @@ bool   spi_busy      (SpiBus) { return false; }
 // ---------------------------------------------------------------------------
 static TwoWire s_mag_wire(board::mag_sda,board::mag_scl);
 static TwoWire& wire_for(I2cBus bus) { return bus==I2cBus::baro ? Wire : s_mag_wire; }
+// BMM350 reads include two dummy bytes. Use the registered Wire IRQ handle,
+// but caller-owned buffers and a whole-transaction microsecond deadline.
+// Wire's millisecond timeout can truncate an otherwise normal burst depending
+// on SysTick phase. No allocation, retry loop, or sensor reset occurs here.
+static Status mag_transfer(uint8_t addr,const uint8_t* wr,size_t wn,uint8_t* rd,size_t rn)
+{
+    auto* h=s_mag_wire.getHandle();
+    const uint32_t start=::micros();
+    constexpr uint32_t budget_us=1800;
+    auto fail=[&](Status status) {
+        // An address NACK is expected for the absent boot-probe address.
+        // Let the HAL's STOP finish; resetting a healthy peripheral here can
+        // disturb the following back-to-back boot transactions.
+        if(status==Status::nack && HAL_I2C_GetState(h)==HAL_I2C_STATE_READY) {
+            while((__HAL_I2C_GET_FLAG(h,I2C_FLAG_BUSY)||(h->Instance->CR1&I2C_CR1_STOP))&&
+                  uint32_t(::micros()-start)<budget_us) {}
+            if(!__HAL_I2C_GET_FLAG(h,I2C_FLAG_BUSY)&&!(h->Instance->CR1&I2C_CR1_STOP)) {
+                ::delayMicroseconds(2); // Fast-mode tBUF >= 1.3 us
+                return status;
+            }
+        }
+        // Cancel IRQ access to caller buffers before returning. Reinitialize
+        // only the MCU peripheral, not the sensor or its calibration.
+        const uint32_t mask=__get_PRIMASK(); __disable_irq();
+        __HAL_I2C_DISABLE_IT(h,I2C_IT_EVT|I2C_IT_BUF|I2C_IT_ERR);
+        HAL_I2C_Init(h); // fixed register setup; no bus waits or allocation
+        h->Lock=HAL_UNLOCKED;
+        if(!mask) __enable_irq();
+        return status;
+    };
+    auto wait=[&]() {
+        while(HAL_I2C_GetState(h)!=HAL_I2C_STATE_READY) {
+            if(HAL_I2C_GetError(h)!=HAL_I2C_ERROR_NONE) break;
+            if(uint32_t(::micros()-start)>=budget_us) return Status::timeout;
+        }
+        const uint32_t error=HAL_I2C_GetError(h);
+        if(error&HAL_I2C_ERROR_AF) return Status::nack;
+        if(error&HAL_I2C_ERROR_TIMEOUT) return Status::timeout;
+        return error==HAL_I2C_ERROR_NONE?Status::ok:Status::error;
+    };
+    // Avoid the HAL's internal millisecond BUSY wait before starting a frame.
+    if(HAL_I2C_GetState(h)!=HAL_I2C_STATE_READY) return fail(Status::busy);
+    while(__HAL_I2C_GET_FLAG(h,I2C_FLAG_BUSY)||(h->Instance->CR1&I2C_CR1_STOP))
+        if(uint32_t(::micros()-start)>=budget_us) return fail(Status::busy);
+    if(wn) {
+        if(HAL_I2C_Master_Seq_Transmit_IT(h,addr<<1,const_cast<uint8_t*>(wr),wn,
+                    rn?I2C_FIRST_FRAME:I2C_FIRST_AND_LAST_FRAME)!=HAL_OK) return fail(Status::busy);
+        const Status status=wait(); if(status!=Status::ok) return fail(status);
+    }
+    if(rn) {
+        if(uint32_t(::micros()-start)>=budget_us) return fail(Status::timeout);
+        if(HAL_I2C_Master_Seq_Receive_IT(h,addr<<1,rd,rn,
+                    wn?I2C_LAST_FRAME:I2C_FIRST_AND_LAST_FRAME)!=HAL_OK) return fail(Status::busy);
+        const Status status=wait(); if(status!=Status::ok) return fail(status);
+    }
+    while(__HAL_I2C_GET_FLAG(h,I2C_FLAG_BUSY)||(h->Instance->CR1&I2C_CR1_STOP))
+        if(uint32_t(::micros()-start)>=budget_us) return fail(Status::timeout);
+    ::delayMicroseconds(2); // Fast-mode minimum bus-free time after STOP
+    return Status::ok;
+}
 Status i2c_config(I2cBus bus,uint32_t hz)
 {
     if(!board_configured()) return Status::unsupported;
@@ -127,7 +187,8 @@ Status i2c_config(I2cBus bus,uint32_t hz)
 }
 Status i2c_write_read(I2cBus bus,uint8_t addr,const uint8_t* wr,size_t wn,uint8_t* rd,size_t rn)
 {
-    if(!board_configured() || rn>255) return Status::unsupported;
+    if(!board_configured() || rn>255 || wn>255 || (wn&&!wr) || (rn&&!rd)) return Status::unsupported;
+    if(bus==I2cBus::mag) return mag_transfer(addr,wr,wn,rd,rn);
     TwoWire& wire=wire_for(bus);
     if(wn) {
         wire.beginTransmission(addr);

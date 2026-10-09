@@ -553,6 +553,7 @@ void task_debug()   // 2 Hz -- low-rate status lines (no blocking calls here)
         L().print(F("MAG_HEALTH,enabled=")); L().print(config::enable_magnetometer?1:0);
         L().print(F(",initialized=")); L().print(md.initialized?1:0);
         L().print(F(",healthy=")); L().print(mag350::healthy()?1:0);
+        L().print(F(",communicating=")); L().print(mag350::communicating()?1:0);
         L().print(F(",stage=")); L().print(md.stage);
         L().print(F(",result=")); L().print(int(md.result));
         L().print(F(",chip_id=")); L().print(md.chip_id);
@@ -561,7 +562,29 @@ void task_debug()   // 2 Hz -- low-rate status lines (no blocking calls here)
         L().print(F(",bus_errors=")); L().print(md.bus_errors);
         L().print(F(",last_reg=")); L().print(md.last_error_register);
         L().print(F(",status=")); L().print(md.status);
-        L().print(F(",samples=")); L().println(md.samples);
+        L().print(F(",samples=")); L().print(md.samples);
+        L().print(F(",reads=")); L().print(md.reads);
+        L().print(F(",invalid=")); L().print(md.invalid_samples);
+        L().print(F(",bus_status=")); L().print(int(md.last_bus_status));
+        L().print(F(",consecutive=")); L().print(md.consecutive_errors);
+        L().print(F(",recoveries=")); L().print(md.recoveries);
+        L().print(F(",otp_error=")); L().print(md.otp_error);
+        L().print(F(",self_test=")); L().println(md.self_test_ok?1:0);
+        L().print(F("MAG_CHECK,x=")); L().print(md.self_test_x,2);
+        L().print(F(",y=")); L().print(md.self_test_y,2);
+        L().print(F(",err=")); L().print(md.error_reg);
+        L().print(F(",pmu=")); L().print(md.pmu);
+        L().print(F(",aggr=")); L().print(md.aggr);
+        L().print(F(",axes=")); L().print(md.axes);
+        L().print(F(",st=")); L().println(md.self_test_reg);
+        // Diagnostic values may be invalid; only MAG contains accepted data.
+        L().print(F("MAG_DATA,x=")); L().print(md.last_sample.x_ut,2);
+        L().print(F(",y=")); L().print(md.last_sample.y_ut,2);
+        L().print(F(",z=")); L().print(md.last_sample.z_ut,2);
+        L().print(F(",temp=")); L().print(md.last_sample.temp_c,2);
+        L().print(F(",raw="));
+        for(unsigned i=0;i<4;++i) { if(i) L().print('/'); L().print(md.raw[i]); }
+        L().println();
         const bool attitude_ok=heading_attitude_valid(),mag_ok=magnetic_driver_healthy();
         const bool mag_aiding=s_heading.aiding(now,attitude_ok,mag_ok);
         const bool heading_ok=s_heading.heading_valid(now,attitude_ok,mag_ok);

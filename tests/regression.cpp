@@ -133,6 +133,7 @@ namespace mag350 {
 bool begin(){return true;}
 bool poll(Sample& s){if(!mock::mag_sample)return false;mock::mag_sample=false;s=mock::magnetic;return true;}
 bool healthy(){return mock::mag_ok;}
+bool communicating(){return mock::mag_ok;}
 const Diagnostics& diagnostics(){static Diagnostics d{};return d;}
 }
 int failures=0,checks=0;

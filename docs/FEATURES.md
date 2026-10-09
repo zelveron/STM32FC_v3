@@ -128,16 +128,31 @@ This catalog describes the **implemented STM32FC_v3 development firmware for PCB
 ## Magnetometer
 
 - BMM350 official Bosch initialization, compensation, 25 Hz acquisition and ready polling.
-- Finite-value checks and 200 ms health expiry.
+- Finite-value, 2000 µT total-field and −40…85 °C checks, with 200 ms health expiry.
+- Boot-only Bosch X/Y self-test, with at least 300 µT positive-minus-negative
+  response on each axis. Normal 25 Hz/8-average mode is restored afterward;
+  readback verifies mode, averaging, enabled axes, error register and self-test
+  disabled. Failed self-test responses never become heading input.
+- Dedicated 400 kHz BMM350 transfers use caller-owned buffers and an 1800 µs
+  whole-transaction deadline. Runtime read failures invalidate data immediately
+  and retry after 100/200/400/800/1000 ms; a new accepted sample restores health.
+  No blocking sensor reset or OTP reload runs in the flight loop.
 - Continuous `MAG_HEALTH` USB diagnostics: firmware enable, completed startup,
   current health, failed stage, Bosch result, chip ID, I2C error count/last
   failed register, last ready status and valid sample count. Boot-only,
   read-only CHIP_ID probes at `0x14` / `0x15` distinguish a failed transfer
   (`-1`) from a returned ID (`51` is the expected `0x33`). Probes never change
-  the configured address or repeatedly retry a failed sensor during flight.
+  the configured address. Failed initialization is not repeated in flight;
+  transient reads from an initialized device use the bounded retry policy.
   Stage codes: 0 ready/not started, 1 bus setup, 2 Bosch initialization,
   3 interrupt configuration, 4 interrupt enable, 5 rate/averaging, 6 axes,
-  7 normal mode, 8 status read, 9 sample read and 10 nonfinite sample.
+  7 normal mode, 8 status read, 9 sample read, 10 nonfinite sample,
+  11 out-of-range measurement, 12 incomplete OTP calibration acquisition,
+  13 failed self-test and 14 configuration readback failure.
+  Live communication is reported separately from accepted data; counters also
+  report completed reads, rejected measurements and recovered read failures.
+- `MAG_DATA` preserves the last compensated values, temperature and signed
+  24-bit raw burst for diagnosis even when rejected; it is not heading input.
 - Original compensated sensor axes remain on `MAG` for calibration/testing; `YAW_STATUS` reports the actual heading source, validation reason and hold target.
 - Gated magnetic yaw fusion and ASSIST heading hold are implemented. The offline calibration tool fits mounting and hard/soft iron from rotation captures. No measured installation calibration is assumed; see [MAGNETIC_HEADING.md](MAGNETIC_HEADING.md).
 

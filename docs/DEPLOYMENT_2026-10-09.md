@@ -1,5 +1,9 @@
 # Motor-enabled flight deployment — 2026-10-09
 
+**Superseded later that day:** [BMM350 transport repair and new flight
+deployment](BMM350_FIX_2026-10-09.md). The measurements below describe the
+earlier image and are retained as history.
+
 At the user's explicit request, the Raspberry Pi-connected controller was
 programmed with **`v2_flight`**, not the motor-inhibited default profile.
 The updated source GUI was launched on the Pi, closed for USB programming,

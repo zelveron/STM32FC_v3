@@ -58,6 +58,38 @@ YAW_STATUS,source=BMM350,valid=1,reason=tracking,heading=90.0,mag_heading=90.0,f
 
 `ATT`, CRSF attitude yaw and attitude log frames all use the same corrected AHRS quaternion. CRSF GPS course remains ground track; no new radio fields or channel assignments are added. GUI status may lag by the one-second reporting interval and expires after three seconds, while firmware enforces the 200 ms compass timeout on every control tick.
 
+The Sensors page uses `MAG_HEALTH` to distinguish initialization failure, I²C
+timeout/busy/NACK, no fresh sample, invalid/out-of-range values and streaming.
+Driver failure takes precedence over the heading installation reminder;
+`configured` still reports calibration independently. A previously accepted
+`MAG` value is not displayed as valid while current driver health is bad.
+
+`MAG_HEALTH` includes `communicating` (a completed measurement read within
+200 ms), `reads`, `samples` (accepted measurements), `invalid`, `consecutive`
+read failures, `recoveries`, `otp_error` and `bus_status`. The last failed
+transport status is retained for diagnosis: 0 none, −1 generic error,
+−2 timeout, −3 busy, −4 unsupported, −5 NACK. It is historical after recovery;
+use current `stage`, `healthy` and `communicating` to interpret it. Startup
+fails if any OTP transfer/status failure occurs, even if Bosch's final OTP
+word succeeds. Stage codes are listed in [FEATURES.md](FEATURES.md).
+
+`MAG_DATA,x=…,y=…,z=…,temp=…,raw=x/y/z/t` reports the last measurement read,
+including rejected values. Magnetic values are µT, temperature is °C, and
+raw values are signed 24-bit counts from that same coherent burst after
+removing Bosch's two dummy bytes. This record is diagnostic, not proof of
+freshness or valid heading. Only accepted values are published on `MAG`.
+
+`MAG_CHECK,x=…,y=…,err=…,pmu=…,aggr=…,axes=…,st=…` retains the **boot-time**
+positive-minus-negative X/Y self-test responses in µT and the configuration
+register snapshot. The full self-test threshold is 300 µT per axis, as in
+[Bosch's pinned out-of-range API](https://github.com/boschsensortec/BMM350_SensorAPI/blob/3daf377ccaf589319c0d41af192105e9275987a2/bmm350_oor.h).
+Expected registers are `err=0,pmu=40,aggr=54,axes=7,st=0` (decimal): normal
+mode, 25 Hz with eight-sample averaging, XYZ enabled and user self-test off.
+The Bosch self-test includes a magnetic reset and runs only before scheduler
+startup. A failed numerical response allows diagnostic reads but rejects
+measurements; transfer/cleanup/configuration failures prevent acquisition.
+The GUI shows the startup X/Y responses separately from the current field.
+
 ## Software verification
 
 Run `python3 tools/test_host.py` on Linux or `tools/test_host.ps1` on Windows, plus `python3 tests/mag_calibration.py` and the GUI tests. Coverage includes tilt compensation, calibration/axis mapping, angle wrap, field/innovation rejection, stale/failed sensors, bounded airborne acquisition, shared application/AHRS integration, gyro drift correction, pilot override and closed-loop heading recovery in the simplified aircraft model. These checks do not constitute hardware or flight qualification.

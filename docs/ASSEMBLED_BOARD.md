@@ -1,7 +1,7 @@
 # Current BMI270 card — 2026-10-08
 
-**Later deployment, 2026-10-09:** [motor-enabled flight firmware was flashed
-and readback-verified](DEPLOYMENT_2026-10-09.md). That record includes current
+**Later deployment, 2026-10-09:** [BMM350 transport was repaired and the
+motor-enabled flight firmware was flashed and verified](BMM350_FIX_2026-10-09.md). That record includes current
 IMU/BMP health and BMM350 acquisition/calibration limitations. The dated
 observations below remain historical.
 

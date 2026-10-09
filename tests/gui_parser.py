@@ -8,6 +8,15 @@ from gui_demo import frame
 
 
 class TelemetryTests(unittest.TestCase):
+    def test_magnetic_startup_checks_are_explicit(self):
+        m=Telemetry()
+        line="MAG_CHECK,x=410.5,y=420,err=0,pmu=40,aggr=54,axes=7,st=0"
+        self.assertTrue(m.feed(line)); self.assertEqual(m.get("MAG_CHECK")["x"],410.5)
+        self.assertFalse(m.feed(line.replace("pmu=40","pmu=256")))
+        base="MAG_HEALTH,enabled=1,initialized=1,healthy=0,stage=13,result=0,self_test=0"
+        self.assertTrue(m.feed(base));self.assertEqual(m.health("mag").label,"Self-test failed")
+        self.assertTrue(m.feed(base.replace("stage=13","stage=14")));self.assertEqual(m.health("mag").label,"Configuration failed")
+
     def setUp(self):
         self.now=10.0
         self.m=Telemetry(lambda:self.now)
@@ -76,6 +85,28 @@ class TelemetryTests(unittest.TestCase):
         self.populate(); self.now+=6; self.assertIsNotNone(self.m.get("SD_DBG"))
         self.m.feed("SD_DBG,0,,bytes=0,log_drops=0,usb_drops=1")
         self.assertEqual(self.m.health("sd").label,"Inactive")
+
+    def test_magnetic_health_distinguishes_link_data_and_heading(self):
+        self.m.feed("IMU_CONFIG,model=BMI270,mag=1,error0=0,error1=0")
+        base="MAG_HEALTH,enabled=1,initialized=1,healthy=0,communicating=0,stage=9,result=-2,bus_status=-2,last_reg=49,samples=19,bus_errors=1,consecutive=1,recoveries=0"
+        self.assertTrue(self.m.feed(base)); self.m.feed("MAG,30,0,40")
+        self.assertEqual(self.m.health("mag").label,"I²C timeout")
+        self.assertIn("0x31",self.m.health("mag").detail)
+        self.assertTrue(self.m.feed(base.replace("stage=9","stage=11").replace("communicating=0","communicating=1")))
+        self.assertEqual(self.m.health("mag").label,"Out of range")
+        self.assertIn("Live communication",self.m.health("mag").detail)
+        self.m.feed(base.replace("stage=9","stage=0").replace("healthy=0","healthy=1").replace("communicating=0","communicating=1").replace("result=-2","result=0"))
+        self.assertEqual(self.m.health("mag").label,"Streaming")
+        self.now+=3.1
+        self.m.feed("IMU_CONFIG,model=BMI270,mag=1,error0=0,error1=0"); self.m.feed("MAG,30,0,40")
+        self.assertEqual(self.m.health("mag").label,"Stale")
+
+    def test_invalid_magnetic_diagnostics_never_become_samples(self):
+        self.assertTrue(self.m.feed("MAG_DATA,x=nan,y=-3300,z=inf,temp=30,raw=-550000/-450000/0/55000"))
+        self.assertIsNone(self.m.get("MAG_DATA")["x"])
+        self.assertIsNone(self.m.get("MAG"))
+        self.assertFalse(self.m.feed("MAG_HEALTH,enabled=1,initialized=1,healthy=9,stage=9,result=-2"))
+        self.assertFalse(self.m.feed("MAG_DATA,x=1,y=2,z=3,temp=30,raw=999999999/0/0/0"))
 
     def test_rc_echo_does_not_prove_link(self):
         self.populate(); self.m.feed("CRSF_STAT,receiving=0,frames_ok=1,crc_err=0,resync=0,telem_tx=0")

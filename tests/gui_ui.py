@@ -116,5 +116,21 @@ class DashboardTests(unittest.TestCase):
         w.model.feed("MAG,30,0,40")
         w.render(); self.assertIn("unavailable",w.yaw_source.text())
 
+    def test_mag_fault_is_displayed_even_with_recent_sample(self):
+        w=self.window;w.link_open=True
+        for line in frame(0):w.model.feed(line)
+        w.model.feed("MAG,30,0,40")
+        w.model.feed("MAG_HEALTH,enabled=1,initialized=1,healthy=0,communicating=1,stage=11,result=0,samples=19,reads=22,bus_errors=0,invalid=3")
+        w.model.feed("MAG_DATA,x=-3895,y=-3358,z=-41,temp=30,raw=-550000/-450000/-6000/55000")
+        w.model.feed("MAG_CHECK,x=0.5,y=0.1,err=0,pmu=40,aggr=54,axes=7,st=0")
+        w.render()
+        self.assertIn("Out of range",w.storage_details.text())
+        self.assertIn("Rejected field: -3895.00",w.storage_details.text())
+        self.assertNotIn("+30.00 / +0.00",w.storage_details.text())
+        self.assertIn("Startup self-test X/Y: 0.50 / 0.10",w.storage_details.text())
+        w.model.feed("MAG_HEALTH,enabled=1,initialized=0,healthy=0,stage=13,result=-2,reads=0")
+        w.render();self.assertIn("incomplete (communication error)",w.storage_details.text())
+        self.assertNotIn("Rejected field",w.storage_details.text())
+
 
 if __name__ == "__main__": unittest.main()

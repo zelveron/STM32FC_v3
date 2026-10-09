@@ -10,6 +10,12 @@ Custom flight-controller firmware for RC fixed-wing aircraft, targeting the **ma
 
 ## Current card — 2026-10-08
 
+**BMM350 update — 2026-10-09:** The full flight image now sustains BMM350
+communication and passes its Bosch startup self-test/configuration checks.
+Actual measurements remain out of range and are rejected; magnetic heading
+is unavailable. The source GUI distinguishes this from no communication.
+See the [repair, live results and verified image](docs/BMM350_FIX_2026-10-09.md).
+
 The user identified the card connected to the Raspberry Pi as the **BMI270** assembly. The default environment in this checkout is now **`v2_bmi270`**, using the existing dual-BMI270 driver. It enables BMM350 acquisition while preserving motor inhibition (`FC_MAG_ENABLED=1`, `FC_FLIGHT_ENABLED=0`). Magnetic fusion is gated on measured calibration. Build with `pio run` or `pio run -e v2_bmi270`. BMI270 is the only supported IMU; the legacy driver, vendor library and build profile have been removed.
 
 The BMI270 path runs Bosch's reset/SPI-selection sequence and uploads all 8192 configuration bytes independently to each IMU. Initialization uses 1 MHz SPI, then waits 80 ms after enabling measurement before switching to 5 MHz FIFO service and flushing startup frames. This covers the gyroscope's documented 45 ms startup; without settling, dummy FIFO frames can latch the strict paired-frame parser as failed. See the [Bosch BMI270 datasheet](https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmi270-ds000.pdf), sections 1 and 4.4. Runtime FIFO, freshness, clipping and failover checks remain active.

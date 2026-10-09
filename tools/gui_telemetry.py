@@ -8,7 +8,7 @@ import time
 TTL = {"ATT": .35, "BMI": .35, "BMP": .35, "MAG": .5, "RC": .5, "OUT": .5,
        "MODE": 1.5, "LINK": 1.5, "GPS": 2.5, "GPS_STAT": 2.5, "GPS_HEALTH": 3,
        "SD_DBG": 12, "IMU_CONFIG": 3, "IMU_HEALTH": 3, "BMP_HEALTH": 3,
-       "CRSF_STAT": 3, "EST": 3, "TELEM": 3, "YAW_STATUS": 3, "MAG_HEALTH": 3}
+       "CRSF_STAT": 3, "EST": 3, "TELEM": 3, "YAW_STATUS": 3, "MAG_HEALTH": 3, "MAG_DATA": 3, "MAG_CHECK": 3}
 
 
 @dataclass(frozen=True)
@@ -132,6 +132,28 @@ class Telemetry:
                 value = {"valid": int(kv["valid"]), "error": int(kv["error"])}
                 if value["valid"] not in (0, 1):
                     raise ValueError("barometer flag")
+            elif tag == "MAG_HEALTH":
+                value = {k:int(v) for k,v in kv.items()}
+                for k in ("enabled", "initialized", "healthy"):
+                    if value[k] not in (0,1): raise ValueError("magnetic flag")
+                if "communicating" in value and value["communicating"] not in (0,1): raise ValueError("magnetic link")
+                if not 0 <= value["stage"] <= 14 or not -127 <= value["result"] <= 127: raise ValueError("magnetic error")
+                if "self_test" in value and value["self_test"] not in (0,1): raise ValueError("magnetic self-test")
+                for k in ("samples", "bus_errors", "reads", "invalid", "consecutive", "recoveries"):
+                    if value.get(k,0) < 0: raise ValueError("magnetic counter")
+                for k in ("chip_id", "last_reg", "status", "otp_error"):
+                    if not 0 <= value.get(k,0) <= 255: raise ValueError("magnetic register")
+                if value.get("bus_status",0) not in (0,-1,-2,-3,-4,-5): raise ValueError("magnetic bus status")
+            elif tag == "MAG_CHECK":
+                value={k:int(kv[k]) for k in ("err","pmu","aggr","axes","st")}
+                if any(not 0<=v<=255 for v in value.values()): raise ValueError("magnetic configuration")
+                for k in ("x","y"):
+                    v=float(kv[k]); value[k]=v if math.isfinite(v) else None
+            elif tag == "MAG_DATA":
+                value={k:float(kv[k]) for k in ("x", "y", "z", "temp")}
+                value={k:(v if math.isfinite(v) else None) for k,v in value.items()}
+                value["raw"]=[int(v) for v in kv["raw"].split("/")]
+                if len(value["raw"])!=4 or any(not -8388608<=v<=8388607 for v in value["raw"]): raise ValueError("magnetic raw data")
             elif tag == "YAW_STATUS":
                 value = dict(kv)
                 if kv["source"] not in ("NONE", "GYRO", "BMM350"):
@@ -241,6 +263,7 @@ class Telemetry:
             return Health("off", "Offline", "No controller connection")
         tag = {"usb": "MODE", "imu1": "IMU_HEALTH", "imu2": "IMU_HEALTH", "baro": "BMP_HEALTH",
                "gps": "GPS_HEALTH", "rc": "CRSF_STAT", "sd": "SD_DBG", "mag": "IMU_CONFIG"}[component]
+        if component=="mag" and "MAG_HEALTH" in self.records: tag="MAG_HEALTH"
         h = self.get(tag)
         if component == "usb":
             if self.last_rx is not None and self.clock() - self.last_rx < 2:
@@ -271,6 +294,23 @@ class Telemetry:
             return Health("ok" if self.receiver_live() else "bad", "Linked" if self.receiver_live() else "Link lost", "ER8 / CRSF receiver")
         if component == "sd":
             return Health("ok" if h["active"] else "warn", "Recording" if h["active"] else "Inactive", h["file"] if h["active"] else "No active SD log; card presence is not reported")
+        if tag=="MAG_HEALTH":
+            if not h["enabled"]: return Health("off", "Disabled", "BMM350 disabled by firmware")
+            stage=h["stage"]
+            counts=f"Accepted {h.get('samples',0)} / rejected {h.get('invalid',0)} / bus errors {h.get('bus_errors',0)} / recovered {h.get('recoveries',0)}"
+            if stage in (8,9):
+                error={-2:"I²C timeout",-3:"I²C busy",-5:"I²C NACK"}.get(h.get("bus_status"),"I²C read failed")
+                return Health("bad", error, f"{'Status' if stage==8 else 'Sample'} read at 0x{h.get('last_reg',0):02X}; consecutive failures {h.get('consecutive',0)}\n{counts}")
+            if stage in (10,11):
+                return Health("bad", "Out of range" if stage==11 else "Invalid values", f"{'Live communication' if h.get('communicating') else 'Last received data'}; measurements rejected\n{counts}")
+            if stage==13:
+                return Health("bad", "Self-test I/O failed" if h["result"] else "Self-test failed", "BMM350 startup X/Y self-test unavailable/failed; heading unavailable\n"+counts)
+            if stage==14: return Health("bad", "Configuration failed", "BMM350 startup register readback failed\n"+counts)
+            if not h["initialized"] or stage in range(1,8) or stage==12:
+                return Health("bad", "Init failed", f"{'OTP calibration acquisition failed' if stage==12 else 'BMM350 startup failed'}; stage {stage}, Bosch result {h['result']}\n{counts}")
+            if not h["healthy"] or not self.get("MAG"):
+                return Health("stale", "No sample", "No fresh valid BMM350 measurement\n"+counts)
+            return Health("ok", "Streaming", "Live valid BMM350 measurements\n"+counts)
         if not h["mag"]:
             return Health("off", "Disabled", "Magnetometer disabled by firmware configuration")
         return Health("ok" if self.get("MAG") else "stale", "Streaming" if self.get("MAG") else "No sample", "BMM350 measurements; see heading source for fusion status")

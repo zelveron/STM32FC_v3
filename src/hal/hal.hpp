@@ -25,6 +25,7 @@ enum class Status : int8_t {
     timeout     = -2,
     busy        = -3,
     unsupported = -4,   // capability declared but not implemented on this backend yet
+    nack        = -5,   // address/data not acknowledged
 };
 
 // Semantic peripheral IDs. The backend maps these to concrete instances / pins;

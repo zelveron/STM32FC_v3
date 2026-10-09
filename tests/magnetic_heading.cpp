@@ -30,6 +30,7 @@ int main() {
     using estimation::MagHeading;
     float b[3]={30,0,40}; MagHeading unconfigured;
     check("online sensor cannot bypass missing installation calibration",unconfigured.observe(30,0,40,0,0,0,true,true,1000)==0&&!unconfigured.aiding(1000,true,true)&&unconfigured.state(1000,true,true)==MagHeading::State::setup);
+    check("driver failure takes diagnostic priority over missing calibration",unconfigured.state(1000,true,false)==MagHeading::State::driver);
     auto c=configured(); c.enabled=false; MagHeading disabled(c);
     check("compile-time disabled magnetometer remains gyro-only",disabled.observe(30,0,40,0,0,0,true,true,0)==0&&disabled.state(0,true,true)==MagHeading::State::disabled);
     c=configured(); c.rotation[2]=-3; MagHeading reflection(c);

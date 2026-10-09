@@ -81,8 +81,16 @@ class DashboardPresenter:
         bmi=live("BMI") if attitude else None
         self.imu_signals.setText("Acceleration  "+" / ".join(f"{v:+.4f}" for v in bmi[:3])+" g\nAngular rate  "+" / ".join(f"{v:+.2f}" for v in bmi[3:])+" °/s" if bmi else "Acceleration —\nAngular rate —")
         self.calibration.setText(f"Gyro calibration: {'ready' if est['bias_ready'] else 'hold still — calibrating'}\nGravity trust: {est['acc_trust']:.2f} / gyro bias {est.get('gbias','—')} °/s" if est else "Calibration status unavailable / stale")
-        sd=live("SD_DBG"); mag=live("MAG")
-        self.storage_details.setText("Magnetometer: "+m.health("mag",online).label+("\n"+" / ".join(f"{v:+.2f}" for v in mag)+" µT" if mag else "")+(f"\nSD: {'logging '+sd['file'] if sd['active'] else 'inactive'}\nWritten {sd['bytes']:,} bytes / log drops {sd['log_drops']} / USB drops {sd['usb_drops']}" if sd else "\nSD status unavailable"))
+        sd=live("SD_DBG"); mh=m.health("mag",online); mag=live("MAG") if mh.state=="ok" else None
+        data=live("MAG_DATA"); health=live("MAG_HEALTH"); measured=""
+        if data and health and health.get("reads",0)>0 and mh.state=="bad":
+            measured="\nRejected field: "+" / ".join(f"{data[k]:+.2f}" if data[k] is not None else "invalid" for k in ("x","y","z"))+" µT"
+        check=live("MAG_CHECK"); startup=""
+        if check:
+            startup="\nStartup self-test X/Y: "+" / ".join(f"{check[k]:.2f}" if check[k] is not None else "invalid" for k in ("x","y"))+" µT (minimum 300 each)"
+            if health and health["stage"]==13 and health["result"]:
+                startup="\nStartup self-test: incomplete (communication error)"
+        self.storage_details.setText("Magnetometer: "+mh.label+"\n"+mh.detail+("\n"+" / ".join(f"{v:+.2f}" for v in mag)+" µT" if mag else measured)+startup+(f"\nSD: {'logging '+sd['file'] if sd['active'] else 'inactive'}\nWritten {sd['bytes']:,} bytes / log drops {sd['log_drops']} / USB drops {sd['usb_drops']}" if sd else "\nSD status unavailable"))
         self.trend.samples=list(m.history); self.trend.now=now; self.trend.update()
         self.dfu_button.setEnabled(self.link_open and not self.demo and not self.pending and not (self.dfu_thread and self.dfu_thread.is_alive()))
         self.packet_count.setText(f"{m.received:,} messages · {m.rejected} rejected · {self.session.dropped} UI drops")

@@ -93,10 +93,10 @@ bool MagHeading::heading_valid(uint32_t now,bool attitude_valid,bool driver_heal
 }
 MagHeading::State MagHeading::state(uint32_t now,bool attitude_valid,bool driver_healthy) const {
     if(!_config.enabled) return State::disabled;
+    if(_state==State::driver || !driver_healthy) return State::driver;
     if(!configured()) return State::setup;
     if(!attitude_valid) return State::no_attitude;
     if(_state==State::field||_state==State::innovation||_state==State::driver) return _state;
-    if(!driver_healthy) return State::driver;
     if(_candidate&&uint32_t(now-_last_ms)>=200) return State::stale;
     return _state;
 }
