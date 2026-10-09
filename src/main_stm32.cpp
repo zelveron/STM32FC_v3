@@ -40,6 +40,7 @@
 #include "core/log_frame.hpp"
 #include "core/diagnostic_log.hpp"
 #include "core/sd_bin_log.hpp"
+#include "core/sd_storage.hpp"
 
 namespace {
 
@@ -535,6 +536,17 @@ void task_debug()   // 2 Hz -- low-rate status lines (no blocking calls here)
         L().print(sd_bin_log::bytes_written());      L().print(F(",log_drops="));
         L().print(s_log_ring.drops());               L().print(F(",usb_drops="));
         L().print(usb_stream::drops());
+        const auto& sd=storage::diagnostics();
+        L().print(F(",stage=")); L().print(sd.stage);
+        L().print(F(",fs=")); L().print(sd.filesystem);
+        L().print(F(",fatfs=")); L().print(sd.fatfs);
+        L().print(F(",hw=")); L().print(sd.hw_error);
+        L().print(F(",sectors=")); L().print(sd.card_sectors);
+        L().print(F(",cmd=")); L().print(sd.command);
+        L().print(F(",r1=")); L().print(sd.response);
+        L().print(F(",dma=")); L().print(sd.dma_status);
+        L().print(F(",remaining=")); L().print(sd.dma_remaining);
+        L().print(F(",dctrl=")); L().print(sd.data_control);
         L().println();
     }
 

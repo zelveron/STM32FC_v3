@@ -112,6 +112,9 @@ Result begin(core::LogRing&){return Result::ok;}bool ok(){return true;}
 const char* name(){return "MOCK";}uint32_t bytes_written(){return 0;}
 uint32_t flush_step(uint32_t){++mock::sd_calls;return 0;}void sync(){++mock::sd_calls;}
 }
+namespace storage {
+const Diagnostics& diagnostics(){static Diagnostics d{};return d;}
+}
 namespace bmp581 {
 int error(){return 0;}
 bool begin(){return true;} bool healthy(){return true;}

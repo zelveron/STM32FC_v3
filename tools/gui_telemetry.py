@@ -205,6 +205,10 @@ class Telemetry:
                 for k in ("bytes", "log_drops", "usb_drops"):
                     value[k] = int(kv[k])
                     if value[k] < 0: raise ValueError("negative counter")
+                for k in ("fs", "fatfs", "hw", "sectors"):
+                    if k in kv:
+                        value[k] = int(kv[k])
+                        if value[k] < 0: raise ValueError("negative SD diagnostic")
                 if value["active"] not in (0, 1): raise ValueError("SD state")
             elif tag == "MODE_CHANGE":
                 value = parts[1]
@@ -293,7 +297,27 @@ class Telemetry:
         if component == "rc":
             return Health("ok" if self.receiver_live() else "bad", "Linked" if self.receiver_live() else "Link lost", "ER8 / CRSF receiver")
         if component == "sd":
-            return Health("ok" if h["active"] else "warn", "Recording" if h["active"] else "Inactive", h["file"] if h["active"] else "No active SD log; card presence is not reported")
+            if h["active"]:
+                return Health("ok", "Recording", f"{h['file']} — {h['bytes']:,} bytes written")
+            stage=h.get("stage", "")
+            reasons={
+                "mount_failed": ("Unavailable", "Card initialization or filesystem mount failed"),
+                "requires_fat32": ("Needs FAT32", "Card is readable; flight logging requires FAT32"),
+                "allocate_failed": ("Allocation failed", "Could not reserve a contiguous 128 MiB log file"),
+                "open_failed": ("File error", "Could not create a new flight log"),
+                "close_failed": ("File error", "Could not commit the log file allocation"),
+                "rng_failed": ("Startup error", "Could not generate a log session identifier"),
+                "extent_invalid": ("Storage error", "Allocated log location is outside the card"),
+                "dma_busy": ("Storage busy", "SD transfer resources were unavailable at startup"),
+                "write_bounds": ("Write stopped", "Requested write was outside the allocated log"),
+                "write_start": ("Write failed", "Could not start an SD write; restart required"),
+                "write_failed": ("Write failed", "SD write failed or timed out; restart required"),
+            }
+            if stage in reasons:
+                label,detail=reasons[stage]
+                if h.get("fatfs"): detail+=f" (filesystem error {h['fatfs']})"
+                return Health("bad", label, detail)
+            return Health("warn", "Inactive", "No active SD log; card presence is not reported")
         if tag=="MAG_HEALTH":
             if not h["enabled"]: return Health("off", "Disabled", "BMM350 disabled by firmware")
             stage=h["stage"]

@@ -44,3 +44,19 @@ The state decoder retains compatibility with older logs. Diagnostic export write
 With motors mechanically disabled, measure control-task maximum execution gaps while logging with several cards, near-full/fragmented cards, deliberate card removal, and long programming stalls. Verify DMA conflicts, CRCs, recovery after power cuts and meaningful per-IMU timing. Confirm no SD fault triggers a control deadline or unexpected reset. This physical validation has not been performed here.
 
 The preallocation/raw extent calculation follows [FatFs f_expand documentation](https://elm-chan.org/fsw/ff/doc/expand.html). The register sequence follows the [ST STM32F4 SD driver](https://github.com/STMicroelectronics/stm32f4xx-hal-driver/blob/master/Src/stm32f4xx_hal_sd.c) and RM0090, with command waiting replaced by explicit later-call polling. The implementation is deliberately tied to this F407/FatFs/FAT32 layout.
+
+## Card status on 2026-10-09
+
+The connected card (61,132,800 sectors of 512 bytes) mounted as FAT32, but boot preallocation failed with `FR_DENIED` (7). A user-requested, one-time on-controller FAT32 format succeeded and cleared that allocation failure. The temporary formatting command, reset request, and formatting implementation were then removed; `FF_USE_MKFS` is disabled again. Normal firmware never formats the card automatically.
+
+**Runtime logging remains unresolved.** The final observed full `v2_flight` image creates `FLT00003.BIN`, then stops during the first DMA write with zero committed bytes. The captured failure is:
+
+```text
+SD_DBG,0,FLT00003.BIN,bytes=0,log_drops=0,usb_drops=0,stage=write_failed,fs=3,fatfs=0,hw=1052736,sectors=61132800,cmd=24,r1=2304,dma=65536,remaining=65471,dctrl=153
+```
+
+CMD24 returned `R1=0x900`; DMA2 stream 6 latched its FIFO error flag (`0x10000`). SDIO status, DMA status/count, and data-control registers are captured before stopping the transfer. This is evidence of the failure location, not a confirmed root cause. The DMA configuration now uses peripheral flow control and the transfer setup order from ST's [F407 board support implementation](https://github.com/STMicroelectronics/stm324xg-eval-bsp/blob/main/stm324xg_eval_sd.c) and HAL, but this did **not** resolve the observed write failure. Further SD investigation was deferred at the user's request.
+
+`SD_DBG` now retains startup/failure stage, FatFs result, filesystem type, card sector count, and write-failure registers. The GUI distinguishes mount, format, allocation, file and write failures instead of displaying only “Inactive”; older firmware remains supported. Here `fs=3` is FatFs's FAT32 type, and `hw` is the HAL error at startup or the saved SDIO status after a runtime write failure. Diagnostic counters do not prove recovered log contents or flight qualification.
+
+The flashed 151,020-byte application payload was read back byte-for-byte, SHA-256 `0d775d97e4fac2020d241fdae71fe102b45ff8a40716091b091f1ea469d4c964`. Motor-enabled flight configuration was preserved. Local deployment evidence is in ignored `build/deploy-sd-format-20261009/`; binaries and temporary maintenance utilities are not part of the repository.

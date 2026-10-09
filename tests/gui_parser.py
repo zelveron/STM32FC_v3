@@ -8,6 +8,20 @@ from gui_demo import frame
 
 
 class TelemetryTests(unittest.TestCase):
+    def test_sd_failures_are_distinguished(self):
+        m=Telemetry()
+        line="SD_DBG,0,FLT00000.BIN,bytes=0,log_drops=0,usb_drops=0,stage=requires_fat32,fs=4,fatfs=0,hw=0,sectors=125000000"
+        self.assertTrue(m.feed(line));self.assertEqual(m.health("sd").label,"Needs FAT32")
+        self.assertTrue(m.feed(line.replace("requires_fat32","allocate_failed").replace("fatfs=0","fatfs=7")))
+        self.assertEqual(m.health("sd").label,"Allocation failed")
+        self.assertIn("filesystem error 7",m.health("sd").detail)
+        self.assertTrue(m.feed(line.replace("requires_fat32","write_failed")))
+        self.assertEqual(m.health("sd").label,"Write failed")
+        self.assertFalse(m.feed(line.replace("fs=4","fs=-1")))
+        self.assertTrue(m.feed(line.replace("SD_DBG,0,","SD_DBG,1,").replace("bytes=0","bytes=123456").replace("requires_fat32","ready")))
+        self.assertEqual(m.health("sd").label,"Recording")
+        self.assertIn("123,456",m.health("sd").detail)
+
     def test_magnetic_startup_checks_are_explicit(self):
         m=Telemetry()
         line="MAG_CHECK,x=410.5,y=420,err=0,pmu=40,aggr=54,axes=7,st=0"
