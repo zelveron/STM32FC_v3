@@ -570,6 +570,30 @@ void task_debug()   // 2 Hz -- low-rate status lines (no blocking calls here)
         L().print(F(",recoveries=")); L().print(md.recoveries);
         L().print(F(",otp_error=")); L().print(md.otp_error);
         L().print(F(",self_test=")); L().println(md.self_test_ok?1:0);
+        L().print(F("MAG_OTP_STATUS,passes=")); L().print(md.otp_passes);
+        L().print(F(",mismatch=")); L().println(md.otp_mismatch);
+        // One short saved-diagnostic chunk per status tick. This does not
+        // access the sensor, and late USB joins can collect a complete cycle.
+        static unsigned mag_dump_chunk=0;
+        constexpr unsigned otp_chunks=mag350::otp_word_count/8;
+        constexpr unsigned trim_chunks=(mag350::trim_count+7)/8;
+        if(mag_dump_chunk<mag350::otp_pass_count*otp_chunks) {
+            const unsigned pass=mag_dump_chunk/otp_chunks,offset=(mag_dump_chunk%otp_chunks)*8;
+            L().print(F("MAG_OTP,pass=")); L().print(pass);
+            L().print(F(",offset=")); L().print(offset);
+            L().print(F(",words="));
+            for(unsigned i=0;i<8;++i) { if(i) L().print('/'); L().print(md.otp[pass][offset+i],HEX); }
+        } else {
+            const unsigned offset=(mag_dump_chunk-mag350::otp_pass_count*otp_chunks)*8;
+            L().print(F("MAG_TRIM,offset=")); L().print(offset);
+            L().print(F(",bits="));
+            for(unsigned i=offset;i<offset+8&&i<mag350::trim_count;++i) {
+                uint32_t bits; std::memcpy(&bits,&md.trim[i],sizeof(bits));
+                if(i!=offset) L().print('/'); L().print(bits,HEX);
+            }
+        }
+        L().println();
+        mag_dump_chunk=(mag_dump_chunk+1)%(mag350::otp_pass_count*otp_chunks+trim_chunks);
         L().print(F("MAG_CHECK,x=")); L().print(md.self_test_x,2);
         L().print(F(",y=")); L().print(md.self_test_y,2);
         L().print(F(",err=")); L().print(md.error_reg);

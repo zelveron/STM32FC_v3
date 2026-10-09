@@ -55,23 +55,47 @@ void read_failed() {
     retry_delay=100u<<shift; if(retry_delay>1000) retry_delay=1000;
     retry_start=hal::millis();
 }
+void save_trim() {
+    const auto& c=dev.mag_comp;
+    const float values[trim_count]={c.dut_offset_coef.t_offs,c.dut_offset_coef.offset_x,
+        c.dut_offset_coef.offset_y,c.dut_offset_coef.offset_z,c.dut_sensit_coef.t_sens,
+        c.dut_sensit_coef.sens_x,c.dut_sensit_coef.sens_y,c.dut_sensit_coef.sens_z,
+        c.dut_tco.tco_x,c.dut_tco.tco_y,c.dut_tco.tco_z,
+        c.dut_tcs.tcs_x,c.dut_tcs.tcs_y,c.dut_tcs.tcs_z,c.dut_t0,
+        c.cross_axis.cross_x_y,c.cross_axis.cross_y_x,c.cross_axis.cross_z_x,c.cross_axis.cross_z_y};
+    std::memcpy(diag.trim,values,sizeof(values));
+}
 }
 bool begin() {
     ready=have_data=have_rx=false; dev={}; diag={}; retry_delay=0;
     // Fast-mode keeps the complete 14-byte read well inside the bounded
     // transport budget, without extending the flight-loop blocking time.
     if(hal::i2c_config(hal::I2cBus::mag,400000)!=hal::Status::ok) { diag.stage=1; return false; }
-    dev.read=read_reg; dev.write=write_reg; dev.delay_us=delay;
-    const int8_t init_result=bmm350_init(&dev);
+    // Read-only OTP acquisition through three complete official boot sequences.
+    // The final sequence supplies the active compensation. No OTP programming
+    // commands are used, and no extra reads/resets occur in runtime polling.
+    int8_t init_result=BMM350_OK;
+    for(unsigned pass=0;pass<otp_pass_count;++pass) {
+        dev={}; dev.read=read_reg; dev.write=write_reg; dev.delay_us=delay;
+        init_result=bmm350_init(&dev);
+        std::memcpy(diag.otp[pass],dev.otp_data,sizeof(dev.otp_data));
+        // The vendor OTP loop returns its final word's result. A later success
+        // must not conceal any earlier transport or OTP-status failure.
+        if(init_result==BMM350_OK && (diag.bus_errors||diag.otp_error)) {
+            diag.stage=12;
+            init_result=diag.bus_errors?BMM350_E_COM_FAIL:BMM350_E_OTP_UNDEFINED;
+            diag.result=init_result; break;
+        }
+        if(!accept(init_result,2)) break;
+        ++diag.otp_passes;
+        for(unsigned word=0;word<otp_word_count;++word)
+            if(diag.otp[pass][word]!=diag.otp[0][word]) diag.otp_mismatch|=uint32_t(1)<<word;
+    }
     diag.chip_id=dev.chip_id;
     diag.id14=probe_id(0x14); diag.id15=probe_id(0x15);
-    // The vendor OTP loop returns its final word's result. Do not let a
-    // successful last read conceal any earlier transport/OTP-status failure.
-    if(init_result==BMM350_OK && (diag.bus_errors||diag.otp_error)) {
-        diag.stage=12; diag.result=diag.bus_errors?BMM350_E_COM_FAIL:BMM350_E_OTP_UNDEFINED;
-        return false;
-    }
-    if(!accept(init_result,2)) return false;
+    if(init_result!=BMM350_OK) return false;
+    if(diag.otp_mismatch) { diag.stage=12; diag.result=BMM350_E_OTP_UNDEFINED; return false; }
+    save_trim();
     // Boot only: Bosch's positive/negative X/Y test includes a full magnetic
     // reset. Never run its blocking delays after the scheduler starts.
     bmm350_self_test self_test{};

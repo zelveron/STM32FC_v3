@@ -15,6 +15,9 @@ communication and passes its Bosch startup self-test/configuration checks.
 Actual measurements remain out of range and are rejected; magnetic heading
 is unavailable. The source GUI distinguishes this from no communication.
 See the [repair, live results and verified image](docs/BMM350_FIX_2026-10-09.md).
+The subsequent [factory-compensation audit](docs/BMM350_COMPENSATION_AUDIT.md)
+verified three identical OTP reads and independently reproduced all 100 rotation
+readings; the large X/Y baseline is already present before compensation.
 
 The user identified the card connected to the Raspberry Pi as the **BMI270** assembly. The default environment in this checkout is now **`v2_bmi270`**, using the existing dual-BMI270 driver. It enables BMM350 acquisition while preserving motor inhibition (`FC_MAG_ENABLED=1`, `FC_FLIGHT_ENABLED=0`). Magnetic fusion is gated on measured calibration. Build with `pio run` or `pio run -e v2_bmi270`. BMI270 is the only supported IMU; the legacy driver, vendor library and build profile have been removed.
 

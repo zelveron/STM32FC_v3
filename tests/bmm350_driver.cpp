@@ -9,6 +9,8 @@ bool config_ok=true;
 int identity14=-1,identity15=-1,transfers=0,checks=0,failures=0;
 bool model=false,data_ready=true;
 bool self_test_response=true,wrong_config=false;
+int init_pass=-1;
+bool otp_changes=false;
 uint32_t now=0; uint8_t regs[256]{},otp_word=0;
 int fault_reg=-1,fault_word=-1,otp_bad_word=-1;
 hal::Status injected=hal::Status::timeout;
@@ -17,6 +19,7 @@ namespace hal {
 uint32_t millis(){return now;}
 void delay_us(uint32_t){}
 Status i2c_config(I2cBus bus,uint32_t hz) {
+    init_pass=-1;
     return config_ok && bus==I2cBus::mag && hz==400000 ? Status::ok:Status::error;
 }
 Status i2c_write_read(I2cBus bus,uint8_t addr,const uint8_t* wr,size_t wn,uint8_t* rd,size_t rn) {
@@ -33,6 +36,10 @@ Status i2c_write_read(I2cBus bus,uint8_t addr,const uint8_t* wr,size_t wn,uint8_
             for(size_t i=2;i<rn;++i)rd[i]=regs[uint8_t(reg+i-2)];
             if(reg==BMM350_REG_CHIP_ID)rd[2]=uint8_t(id);
             if(reg==BMM350_REG_OTP_STATUS_REG)rd[2]=1|(otp_word==otp_bad_word?0x20:0);
+            // Distinct MSB/LSB bytes and a signed compensation coefficient.
+            const uint16_t otp_value=otp_word==0?0x1234:otp_word==13?0xff01:0;
+            if(reg==BMM350_REG_OTP_DATA_MSB_REG)rd[2]=otp_value>>8;
+            if(reg==BMM350_REG_OTP_DATA_LSB_REG)rd[2]=uint8_t(otp_value)+(otp_changes&&init_pass==1&&otp_word==14?1:0);
             if(reg==BMM350_REG_INT_STATUS)rd[2]=data_ready?BMM350_DRDY_DATA_REG_MSK:0;
             if(reg==BMM350_REG_PMU_CMD_AGGR_SET&&wrong_config)rd[2]=0;
             if(reg==BMM350_REG_MAG_X_XLSB) {
@@ -47,6 +54,7 @@ Status i2c_write_read(I2cBus bus,uint8_t addr,const uint8_t* wr,size_t wn,uint8_
                 for(unsigned i=0;i<4;++i)for(unsigned b=0;b<3;++b)rd[2+i*3+b]=uint32_t(measured[i])>>(8*b);
             }
         } else {
+            if(reg==BMM350_REG_CMD&&wr[1]==BMM350_CMD_SOFTRESET)++init_pass;
             for(size_t i=1;i<wn;++i)regs[uint8_t(reg+i-1)]=wr[i];
             if(reg==BMM350_REG_PMU_CMD)regs[BMM350_REG_PMU_CMD_STATUS_0]=((wr[1]==8?7:wr[1])<<5)|(wr[1]==1?8:0);
             if(reg==BMM350_REG_OTP_CMD_REG)otp_word=wr[1]&31;
@@ -77,6 +85,8 @@ int main() {
     check("bus setup failure resets previous diagnostics",!mag350::begin()&&mag350::diagnostics().stage==1&&mag350::diagnostics().id14==-1&&mag350::diagnostics().samples==0);
     config_ok=model=true;identity14=BMM350_CHIP_ID;
     check("complete Bosch initialization succeeds with register/OTP model",mag350::begin()&&mag350::diagnostics().initialized);
+    check("three identical complete OTP snapshots preserve word byte order",mag350::diagnostics().otp_passes==3&&mag350::diagnostics().otp_mismatch==0&&mag350::diagnostics().otp[0][0]==0x1234&&mag350::diagnostics().otp[2][13]==0xff01);
+    check("factory trim snapshot preserves signed coefficient decoding",mag350::diagnostics().trim[0]==0.2f&&mag350::diagnostics().trim[4]==-1.0f/512);
     check("Bosch self-test passes and normal 25 Hz configuration is restored",mag350::diagnostics().self_test_ok&&mag350::diagnostics().self_test_x>400&&regs[BMM350_REG_TMR_SELFTEST_USER]==0&&mag350::diagnostics().aggr==0x36&&mag350::diagnostics().pmu==0x28);
     check("one coherent burst removes dummy bytes and yields compensated data",mag350::poll(sample)&&mag350::healthy()&&mag350::communicating()&&sample.x_ut>20&&sample.x_ut<40&&sample.y_ut<0&&mag350::diagnostics().raw[1]==-2800);
     now+=200;check("live sample validity and communication both expire",!mag350::healthy()&&!mag350::communicating());
@@ -107,6 +117,8 @@ int main() {
     check("configuration readback mismatch prevents acquisition",!mag350::begin()&&mag350::diagnostics().stage==14);
     wrong_config=false;fault_reg=BMM350_REG_TMR_SELFTEST_USER;
     check("self-test transport failure cannot enable acquisition",!mag350::begin()&&mag350::diagnostics().stage==13&&!mag350::healthy());
+    fault_reg=-1;otp_changes=true;
+    check("one changed OTP word across boot reads prevents using unstable compensation",!mag350::begin()&&mag350::diagnostics().stage==12&&mag350::diagnostics().otp_passes==3&&mag350::diagnostics().otp_mismatch==(1u<<14));
     std::printf("%d checks, %d failures\n",checks,failures);
     return failures?1:0;
 }

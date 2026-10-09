@@ -90,6 +90,11 @@ startup. A failed numerical response allows diagnostic reads but rejects
 measurements; transfer/cleanup/configuration failures prevent acquisition.
 The GUI shows the startup X/Y responses separately from the current field.
 
+For factory-data and arithmetic verification, the firmware also emits saved
+`MAG_OTP_STATUS`, `MAG_OTP` and `MAG_TRIM` records. See the
+[compensation audit](BMM350_COMPENSATION_AUDIT.md) for the independent Python
+checker. This diagnostic does not install a magnetic calibration.
+
 ## Software verification
 
 Run `python3 tools/test_host.py` on Linux or `tools/test_host.ps1` on Windows, plus `python3 tests/mag_calibration.py` and the GUI tests. Coverage includes tilt compensation, calibration/axis mapping, angle wrap, field/innovation rejection, stale/failed sensors, bounded airborne acquisition, shared application/AHRS integration, gyro drift correction, pilot override and closed-loop heading recovery in the simplified aircraft model. These checks do not constitute hardware or flight qualification.
