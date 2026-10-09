@@ -1,6 +1,7 @@
 #include "../src/core/sd_bin_log.hpp"
 #include "../src/core/sd_storage.hpp"
 #include "../src/core/log_sector.hpp"
+#include "../src/hal/stm32/sd_transfer_status.hpp"
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -78,5 +79,31 @@ int main() {
     check("data timeout terminates stuck transfer",stall.poll(1000000)==storage::Progress::error&&forever.stopped);
     auto corrupt=fake::written[1]; corrupt.payload[2]^=1;
     check("sector CRC detects power-cut/corruption",!core::valid(corrupt));
+    using storage::Reply;
+    using storage::f407::write_status;
+    // Replay the real 2026-10-09 first-sector failure snapshot: SDIO is
+    // still transmitting, DMA reports FEIF6 only. It must keep polling.
+    check("recorded SD FIFO warning does not abort an active transfer",
+          write_status(1052736,65536,1)==Reply::pending);
+    check("FIFO warning alone never acknowledges a sector",
+          write_status(0,0x10000,0)==Reply::pending);
+    check("completed DMA plus SD DATAEND accepts an isolated FIFO warning",
+          write_status(0x100,0x210000,0)==Reply::ok);
+    check("DATAEND alone cannot complete a transfer",write_status(0x100,0,0)==Reply::pending);
+    check("DMA complete alone cannot complete a transfer",write_status(0,0x200000,0)==Reply::pending);
+    check("active DMA retains buffer ownership even with completion flags",
+          write_status(0x100,0x210000,1)==Reply::pending);
+    for(uint32_t flag:{2u,8u,16u,512u})
+        check("SD data errors override completion and FIFO warning",
+              write_status(0x100|flag,0x210000,0)==Reply::error);
+    for(uint32_t flag:{0x40000u,0x80000u})
+        check("DMA bus/direct-mode errors override completion and FIFO warning",
+              write_status(0x100,0x210000|flag,0)==Reply::error);
+    Card warned; storage::AsyncCard warning_card; warning_card.configure(warned,1,true);
+    warning_card.start(1,sector,0); warned.rep=Reply::ok; warning_card.poll(1);
+    warned.data=write_status(1052736,65536,1);
+    check("persistent FIFO warning still hits bounded data timeout",
+          warning_card.poll(999999)==storage::Progress::busy&&
+          warning_card.poll(1000000)==storage::Progress::error&&warned.stopped);
     std::printf("%d checks, %d failures\n",checks,fails); return fails?1:0;
 }

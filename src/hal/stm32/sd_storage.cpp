@@ -5,13 +5,20 @@
 #include <Arduino.h>
 #include <STM32SD.h>
 #include <bsp_sd.h>
+#include "sd_transfer_status.hpp"
 #include <cstdio>
 extern "C" SD_HandleTypeDef* BSP_SD_Handle(void);
 namespace storage {
 namespace {
+static_assert(f407::data_errors==(SDIO_STA_DCRCFAIL|SDIO_STA_DTIMEOUT|SDIO_STA_TXUNDERR|SDIO_STA_STBITERR));
+static_assert(f407::dma_errors==(DMA_HISR_DMEIF6|DMA_HISR_TEIF6));
+static_assert(f407::fifo_warning==DMA_HISR_FEIF6 && f407::data_end==SDIO_STA_DATAEND);
+static_assert(f407::dma_complete==DMA_HISR_TCIF6 && f407::stream_enabled==DMA_SxCR_EN);
 class F407Card final:public CardIo {
 public:
     uint32_t stopped_sta=0,stopped_dma=0,stopped_count=0,stopped_dctrl=0;
+    uint32_t fifo_warning_transfers=0;
+    bool saw_fifo_warning=false;
     void command(uint8_t index,uint32_t arg) override {
         // Match HAL's write entry: discard the boot filesystem's data-path
         // configuration before issuing a new single-block write command.
@@ -29,6 +36,7 @@ public:
     }
     bool transmit(const uint8_t* data) override {
         if((DMA2_Stream6->CR&DMA_SxCR_EN)||((uintptr_t)data&3)) return false;
+        saw_fifo_warning=false;
         SDIO->DCTRL=0;
         SDIO->ICR=SDIO_ICR_DCRCFAILC|SDIO_ICR_DTIMEOUTC|SDIO_ICR_TXUNDERRC|
                    SDIO_ICR_DATAENDC|SDIO_ICR_DBCKENDC|SDIO_ICR_STBITERRC;
@@ -50,10 +58,11 @@ public:
         return true;
     }
     Reply transferred() override {
-        if((SDIO->STA&(SDIO_STA_DCRCFAIL|SDIO_STA_DTIMEOUT|SDIO_STA_TXUNDERR|SDIO_STA_STBITERR))||
-           (DMA2->HISR&(DMA_HISR_FEIF6|DMA_HISR_DMEIF6|DMA_HISR_TEIF6))) return Reply::error;
-        return (SDIO->STA&SDIO_STA_DATAEND)&&(DMA2->HISR&DMA_HISR_TCIF6)&&
-               !(DMA2_Stream6->CR&DMA_SxCR_EN)?Reply::ok:Reply::pending;
+        const uint32_t sta=SDIO->STA,dma=DMA2->HISR,cr=DMA2_Stream6->CR;
+        if((dma&DMA_HISR_FEIF6)&&!saw_fifo_warning) {
+            saw_fifo_warning=true; ++fifo_warning_transfers;
+        }
+        return f407::write_status(sta,dma,cr);
     }
     void stop() override {
         stopped_sta=SDIO->STA; stopped_dma=DMA2->HISR;
@@ -86,7 +95,10 @@ bool nonce(uint64_t& value) {
     RNG->CR=0; return value!=0;
 }
 }
-const Diagnostics& diagnostics() { return diag; }
+const Diagnostics& diagnostics() {
+    diag.fifo_warning_transfers=io.fifo_warning_transfers;
+    return diag;
+}
 bool prepare(Extent& e,char (&name)[16]) {
     if(initialized) return false; // no restart/mount while DMA may own a buffer
     initialized=true;

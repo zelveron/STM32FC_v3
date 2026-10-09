@@ -237,6 +237,8 @@ Replace `COM7` with the board's actual port. The GUI displays attitude, dual-IMU
 
 During runtime a **32 KiB ring** feeds single-sector SDIO DMA writes through a bounded command/card-ready state machine serviced at 4 kHz. The runtime path performs no filesystem calls, allocations or blocking card waits. Longer stalls drop complete new records and count drops rather than waiting in control. Errors/timeouts latch logging off until restart.
 
+**Verified SD repair, 2026-10-09:** the first-write failure was caused by treating an isolated DMA FIFO flag as fatal. The corrected driver recorded about 189 seconds on the connected card; independent readback recovered 15,552 valid sectors and 178,566 complete records with no bad record CRCs. Both IMU streams, controller diagnostics and flight state were present. `SD_DBG,fifo_warn` counts these nonfatal warnings. See [the fix, tests and remaining qualification](docs/SD_FIX_2026-10-09.md).
+
 | Stream | Rate | Contents |
 |---|---|---|
 | U4 and U7 independently | 400 Hz each | Sequence/timing, pre-software-filter and filtered/calibrated gyro/accel, calibration state |

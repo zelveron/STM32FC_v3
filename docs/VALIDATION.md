@@ -6,6 +6,22 @@ ER8 reception and outgoing CRSF telemetry counters. The user reports BMM350
 online as of 2026-10-09. No new hardware or flight tests were performed for
 the magnetic-heading software change; installation calibration is still pending.
 
+## 2026-10-09 SD write repair checks
+
+The Windows session pulled `b7936e2`, reproduced the first-sector failure on
+the board, and corrected the classification of an isolated DMA FIFO flag.
+The complete host suite passed **401 C/C++ checks**, including **35 logger/card
+checks**. Both `v2` and `v2_flight` built successfully; 10 Python log-tool and
+27 GUI parser tests passed.
+
+The USB-powered, disarmed board recorded about 189 seconds. Independent card
+readback recovered **15,552 consecutive valid sectors and 178,566 complete
+records**, with zero bad-record CRCs. The full flight image was restored,
+readback verified, and resumed logging into a new file. No latched control
+timing fault or ring drops were reported in the captures. This is a short
+one-card bench test; power-cut, removal, long-duration and flight qualification
+remain outstanding. See [the full SD evidence](SD_FIX_2026-10-09.md).
+
 ## 2026-10-09 magnetic-heading software checks
 
 | Check | Result |

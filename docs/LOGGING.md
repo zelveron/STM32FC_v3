@@ -1,6 +1,6 @@
 # Asynchronous flight logging
 
-The runtime logging path uses a 32 KiB RAM ring, preallocated contiguous FAT32 file, single-sector SDIO DMA writes, and a bounded card-command state machine. It has host fault tests and an STM32 build; real-card electrical/timing/power-loss qualification remains outstanding.
+The runtime logging path uses a 32 KiB RAM ring, preallocated contiguous FAT32 file, single-sector SDIO DMA writes, and a bounded card-command state machine. The first-sector DMA failure was repaired and real-card recording/readback verified on 2026-10-09; see [the repair and evidence](SD_FIX_2026-10-09.md). Broader electrical/timing/power-loss qualification remains outstanding.
 
 ## Startup and runtime
 
@@ -8,7 +8,7 @@ Before the scheduler and motor authorization can run, `storage::prepare()` mount
 
 During runtime, no FatFs calls, HAL command wait loops, busy waits, heap allocations, file allocation, file flushes or directory updates occur in the logger. A 4 kHz service task advances one bounded step: issue CMD24, poll its response, start DMA, poll transfer completion, issue/poll CMD13 until the card reports ready. DMA2 stream 6 / channel 4 belongs exclusively to the SD logger; SDIO uses PC8-PC12 and PD2. Do not share that stream or access the filesystem from other code while raw logging owns it.
 
-The DMA source is an aligned static SRAM sector, not CCM or a stack buffer. The ring is consumed only after successful transfer AND card-programming completion. Command timeout is 5 ms; the entire sector operation is limited to 1 second. Failure disables the transfer path and latches logging off until restart; it never retries mounting or blocks control. No in-flight filesystem close/truncate is attempted. A full file stops logging without touching adjacent sectors.
+The DMA source is an aligned static SRAM sector, not CCM or a stack buffer. The ring is consumed only after successful transfer AND card-programming completion. Command timeout is 5 ms; the entire sector operation is limited to 1 second. Failure disables the transfer path and latches logging off until restart; it never retries mounting or blocks control. An isolated DMA FIFO flag follows ST's SD-driver policy and does not abort a transfer; SDIO data errors and DMA transfer/direct-mode errors still do. `SD_DBG,fifo_warn` counts transfers with this warning, once per transfer. A warning never bypasses completion, card-ready or timeout checks. No in-flight filesystem close/truncate is attempted. A full file stops logging without touching adjacent sectors.
 
 `FC_SD_LOGGING=1` is the default. `FC_SD_LOGGING=0` disables the logger. Motor inhibition remains the separate default `FC_FLIGHT_ENABLED=0` gate. Enabling/building logging does not establish card reliability or flight qualification.
 
@@ -45,11 +45,13 @@ With motors mechanically disabled, measure control-task maximum execution gaps w
 
 The preallocation/raw extent calculation follows [FatFs f_expand documentation](https://elm-chan.org/fsw/ff/doc/expand.html). The register sequence follows the [ST STM32F4 SD driver](https://github.com/STMicroelectronics/stm32f4xx-hal-driver/blob/master/Src/stm32f4xx_hal_sd.c) and RM0090, with command waiting replaced by explicit later-call polling. The implementation is deliberately tied to this F407/FatFs/FAT32 layout.
 
-## Card status on 2026-10-09
+## Earlier card failure on 2026-10-09
+
+This subsection records the failure before [the verified repair](SD_FIX_2026-10-09.md).
 
 The connected card (61,132,800 sectors of 512 bytes) mounted as FAT32, but boot preallocation failed with `FR_DENIED` (7). A user-requested, one-time on-controller FAT32 format succeeded and cleared that allocation failure. The temporary formatting command, reset request, and formatting implementation were then removed; `FF_USE_MKFS` is disabled again. Normal firmware never formats the card automatically.
 
-**Runtime logging remains unresolved.** The final observed full `v2_flight` image creates `FLT00003.BIN`, then stops during the first DMA write with zero committed bytes. The captured failure is:
+**Runtime logging was unresolved in that earlier image.** It created `FLT00003.BIN`, then stopped during the first DMA write with zero committed bytes. The captured failure was:
 
 ```text
 SD_DBG,0,FLT00003.BIN,bytes=0,log_drops=0,usb_drops=0,stage=write_failed,fs=3,fatfs=0,hw=1052736,sectors=61132800,cmd=24,r1=2304,dma=65536,remaining=65471,dctrl=153

@@ -547,6 +547,7 @@ void task_debug()   // 2 Hz -- low-rate status lines (no blocking calls here)
         L().print(F(",dma=")); L().print(sd.dma_status);
         L().print(F(",remaining=")); L().print(sd.dma_remaining);
         L().print(F(",dctrl=")); L().print(sd.data_control);
+        L().print(F(",fifo_warn=")); L().print(sd.fifo_warning_transfers);
         L().println();
     }
 

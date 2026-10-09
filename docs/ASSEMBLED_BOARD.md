@@ -1,5 +1,12 @@
 # Current BMI270 card — 2026-10-08
 
+**SD update, 2026-10-09:** the first-sector DMA logging failure is repaired.
+Recording and independent card readback recovered both IMU streams, controller
+records and flight state with valid sector/record CRCs. The full motor-enabled
+flight firmware was restored and verified afterward, still disarmed on USB
+power. See [the repair and bench evidence](SD_FIX_2026-10-09.md). Earlier
+inactive-SD observations below describe their original captures.
+
 **Later deployment, 2026-10-09:** [BMM350 transport was repaired and the
 motor-enabled flight firmware was flashed and verified](BMM350_FIX_2026-10-09.md). That record includes current
 IMU/BMP health and BMM350 acquisition/calibration limitations. The dated

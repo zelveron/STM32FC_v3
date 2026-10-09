@@ -9,6 +9,7 @@ struct Diagnostics {
     uint32_t hw_error=0;
     uint32_t response=0,dma_status=0;
     uint32_t dma_remaining=0,data_control=0;
+    uint32_t fifo_warning_transfers=0; // transfers with FEIF, not failed writes
     uint8_t command=0;
     int fatfs=0;
     uint8_t filesystem=0;
