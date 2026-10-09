@@ -23,6 +23,10 @@ Magnetic tests use synthetic observations, and aircraft simulation is not
 an identified model of this airframe. See [MAGNETIC_HEADING.md](MAGNETIC_HEADING.md).
 
 `v2_flight` enables motor authorization but does not add flight qualification.
+After these software checks, the user explicitly requested deployment:
+[the flight image was flashed and readback-verified](DEPLOYMENT_2026-10-09.md).
+The runtime check confirmed motor authorization enabled, healthy IMUs/BMP581,
+and the outstanding BMM350 sample-read error and calibration gate.
 The September results below are historical; their statements about untested
 hardware and the former Tk GUI describe that date only.
 

@@ -1,5 +1,10 @@
 # Current BMI270 card — 2026-10-08
 
+**Later deployment, 2026-10-09:** [motor-enabled flight firmware was flashed
+and readback-verified](DEPLOYMENT_2026-10-09.md). That record includes current
+IMU/BMP health and BMM350 acquisition/calibration limitations. The dated
+observations below remain historical.
+
 The user identified the Raspberry Pi-connected controller as the dual-BMI270
 assembly and confirmed USB-only power. This document records software and USB
 bench observations. Earlier assembly results are retained in Git history and
