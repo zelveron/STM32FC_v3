@@ -33,9 +33,9 @@ attempts a real connection. Preview never sends commands to hardware.
 
 | Page | Contents |
 | --- | --- |
-| Flight deck | Artificial horizon, shaded 3D aircraft, roll/pitch/relative yaw, active/requested mode, GPS ground speed, relative barometric altitude, climb, satellites used, position, GPS altitude/UTC, offline north-up ground track, eight component indicators, arming/failsafe/motor authorization/assist lockout/integrator state |
+| Flight deck | Artificial horizon, shaded 3D aircraft, roll/pitch/yaw with magnetic or gyro source, heading-hold target/status, active/requested mode, GPS ground speed, relative barometric altitude, climb, satellites used, position, GPS altitude/UTC, offline north-up ground track, eight component indicators, arming/failsafe/motor authorization/assist lockout/integrator state |
 | Receiver | All 16 CRSF input channels, eight commanded PWM outputs, uplink LQ/RSSI/SNR, valid-frame count, CRC errors/resyncs, telemetry queue count and raw RF-mode enumeration |
-| Sensors | Each BMI270's health/driver error/register snapshot, selected source, dual-IMU disagreement, BMP581 error/pressure/temperature/pressure altitude, GNSS communication/satellite state, filtered selected-IMU acceleration/angular rate, gyro calibration/bias/gravity trust, BMM350 field values, SD status/drop counters and rolling attitude history |
+| Sensors | Each BMI270's health/driver error/register snapshot, selected source, dual-IMU disagreement, BMP581 error/pressure/temperature/pressure altitude, GNSS communication/satellite state, filtered selected-IMU acceleration/angular rate, gyro calibration/bias/gravity trust, BMM350 field values, compass setup/qualification and innovation, SD status/drop counters and rolling attitude history |
 | Diagnostics | Every received tagged message and scheduler task, searchable fields, update age, recent/stale state and local JSON snapshot export |
 | System | Connection/capture state, message and drop counts, recent session/mode events and ROM DFU maintenance |
 
@@ -50,8 +50,10 @@ indicators do not imply both IMUs are feeding the estimator simultaneously.
 - Body axes are forward/right/down. Positive roll is right wing down; positive
   pitch is nose up. The aircraft uses the same roll/pitch/yaw rotation as the
   attitude values. An invalid estimator blanks both attitude instruments.
-- **Yaw is relative, not a magnetic heading.** The current firmware does not
-  fuse BMM350 into heading, even when magnetic samples are available.
+- **Yaw source is explicit.** Qualified BMM350 plus gyro yields magnetic heading;
+  gyro fallback can drift. The heading-hold target appears only when active.
+  Older firmware without `YAW_STATUS` shows an unavailable source. See
+  [compass calibration and heading behavior](MAGNETIC_HEADING.md).
 - **GPS ground speed is not airspeed.** The track is a local offline plot,
   without map tiles, terrain or waypoint navigation. Last track points remain
   gray when there is no current position fix.

@@ -81,7 +81,7 @@ The `!` prefix is an application label; it does not automatically create an Edge
 2. In the default bench build, arming is inhibited but surface/mode tests work. Check radio directions in USB `RC`, output mapping in `OUT`, and attitude signs in `ATT`.
 3. For the separately enabled `v2_motor_test` build, leave a stable link established with CH5 low, then switch CH5 high while throttle is at or below 5%. A high arm switch at boot cannot arm the aircraft; switching high with throttle raised is rejected and requires another low/high cycle.
 4. **MANUAL**: direct surface commands; no IMU required. Motors still require arming. SERVO1/6 receive opposite aileron pulses; SERVO2 is elevator and SERVO4 is rudder. SERVO3 is throttle.
-5. **ASSIST**: roll stick commands approximately +/-40 degrees bank; elevator commands approximately +/-26 degrees pitch. Center requests level roll and configured pitch trim (initially zero). Rudder remains direct pilot input with bounded transient yaw damping; full rudder overrides damping. Throttle remains manual. This does not hold heading, altitude, speed or position.
+5. **ASSIST**: roll stick commands approximately +/-40 degrees bank; elevator commands approximately +/-26 degrees pitch. Center requests level roll and configured pitch trim (initially zero). Rudder remains direct pilot input with bounded transient yaw damping; full rudder overrides damping. Throttle remains manual. With calibrated BMM350, armed/airborne ASSIST captures magnetic heading after centered roll/rudder settles; either stick releases hold. Compass loss restores ordinary roll/pitch ASSIST. This does not hold altitude, speed or position. See [magnetic heading](MAGNETIC_HEADING.md).
 6. **TKOFF**: roll wing leveling with about +/-10 degrees bank command. You still control rotation, climb pitch, rudder and throttle. There is no automatic launch detection or throttle ramp.
 7. CH5 OFF cuts motor commands immediately in software. Disarmed surfaces still operate in the permitted mode for checks. Return to MANUAL for direct stick control.
 
@@ -106,5 +106,5 @@ The firmware timeout starts at the last valid serial channel packet. Add the rec
 | CH5 mix appears correct but arming differs | ELRS `Arm using` setting, actual received CH5, stable link and low throttle |
 | ESCs always at 1000 | Default motor-inhibit build, disarm/failsafe, output or timing fault; inspect boot `FLIGHT_GATE` and FM |
 | ASSIST gives wrong correction | Stop. Check board attitude signs first, then individual servo reversal; do not try to tune around a sign error |
-| No heading accuracy | BMM350 is not fused; yaw is gyro-relative. GNSS course also differs from heading in wind |
+| No heading accuracy | Check USB YAW_STATUS for calibration/qualification and gyro fallback; GNSS course differs from magnetic heading in wind |
 | Telemetry lost/stale | Receiver-to-FC TX wiring, enabled telemetry ratio and RF reception; old sensor values are not proof of current health |

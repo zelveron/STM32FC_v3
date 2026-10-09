@@ -99,7 +99,7 @@ class Instrument(QWidget):
         text(p, (12, h-40, w-24, 24), "ROLL / PITCH · EARTH REFERENCE", "#e9e5df", 8, True)
 
     def aircraft(self, p, w, h):
-        # Isometric observer is fixed in the relative-yaw reference frame.
+        # Isometric observer is fixed in the AHRS world reference frame.
         scale = min(w/8.7, h/7.3)
         def project(point, rotated=False):
             x, y, z = rotate_body(point, *self.attitude) if rotated else point
@@ -127,7 +127,7 @@ class Instrument(QWidget):
             p.drawPolygon(QPolygonF([project(pt, True) for pt in points]))
         nose = project((3.2, 0, 0), True)
         p.setPen(QPen(QColor(CYAN), 1)); p.drawEllipse(nose, 3, 3)
-        text(p, (8, h-34, w-16, 22), "YAW IS RELATIVE · NOT COMPASS HEADING", MUTED, 8, True)
+        text(p, (8, h-34, w-16, 22), "BODY ATTITUDE · HEADING SOURCE BELOW", MUTED, 8, True)
 
 
 class TrackView(QWidget):

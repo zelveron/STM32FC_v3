@@ -15,6 +15,7 @@ void ModeAssist::configure(const control::AttitudeCtrlConfig& att,
 void ModeAssist::enter(const control::Outputs& current)
 {
     _rate.reset(); _seed=true;
+    _holding=false; _capture_s=0; _heading_target=0; _roll_target=0;
     _transition.enter(current);
 }
 
@@ -30,19 +31,38 @@ void ModeAssist::update(const ModeInput& in, control::Outputs& out)
         _heading_slow=heading; _seed=false;
     }
     _heading_slow+=bound(in.dt_s/(.5f+in.dt_s),0,1)*(heading-_heading_slow);
+    const bool eligible=_tuning.heading_hold_enabled&&in.heading_valid&&in.allow_heading_hold&&
+        std::isfinite(in.yaw_rad)&&std::isfinite(in.roll_rad)&&std::isfinite(in.pitch_rad)&&
+        std::isfinite(in.dt_s)&&in.dt_s>0&&in.dt_s<=.02f&&std::fabs(cp)>.5f&&
+        std::fabs(in.sticks.roll)<=_tuning.heading_stick_deadband&&
+        std::fabs(in.sticks.yaw)<=_tuning.heading_stick_deadband;
+    if(!eligible) { _holding=false; _capture_s=0; }
+    else if(!_holding) {
+        // Capture after leveling, not while the pilot's last bank still turns
+        // the aircraft. This avoids fighting roll-out or holding an old target.
+        if(std::fabs(in.roll_rad)<.174533f&&std::fabs(heading)<8) _capture_s+=in.dt_s;
+        else _capture_s=0;
+        if(_capture_s>=_tuning.heading_capture_s) { _heading_target=in.yaw_rad; _holding=true; }
+    }
+    _roll_target=in.sticks.roll*_max_roll;
+    if(_holding) {
+        const float error=std::atan2(std::sin(_heading_target-in.yaw_rad),std::cos(_heading_target-in.yaw_rad));
+        const float limit=std::fmin(_max_roll,_tuning.heading_bank_limit_rad);
+        _roll_target=bound(_tuning.heading_bank_per_rad*error,-limit,limit);
+    }
     const bool air=in.airspeed_valid&&in.airspeed_mps>=_tuning.min_airspeed_mps&&
                    in.airspeed_mps<=_tuning.max_airspeed_mps&&std::isfinite(in.airspeed_mps);
     const float turn=air?_att.coordinated_heading_rate(in.roll_rad,in.pitch_rad,in.airspeed_mps):heading;
     float p,q,r;
     const float tp=bound(in.sticks.pitch*_max_pitch+_tuning.pitch_trim_rad,-_max_pitch,_max_pitch);
-    _att.body_rates(in.sticks.roll*_max_roll,tp,in.roll_rad,in.pitch_rad,turn,p,q,r);
+    _att.body_rates(_roll_target,tp,in.roll_rad,in.pitch_rad,turn,p,q,r);
     _dp=_roll_demand.update(p,_tuning.roll_accel_dps2,in.dt_s);
     _dq=_pitch_demand.update(q,_tuning.pitch_accel_dps2,in.dt_s);
     // Without airspeed a washout damps disturbances, then releases a steady
     // natural turn. With airspeed, use the coordinated turn reference.
     if(!air) {
         float unused_p,unused_q;
-        _att.body_rates(in.sticks.roll*_max_roll,tp,in.roll_rad,in.pitch_rad,
+        _att.body_rates(_roll_target,tp,in.roll_rad,in.pitch_rad,
                         _heading_slow,unused_p,unused_q,r);
     }
     if(!in.allow_integrators) _rate.clear_integrators();

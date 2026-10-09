@@ -11,6 +11,7 @@ def frame(t):
     lat, lon = position(t)
     rc = [1500+int(roll*7), 1500+int(pitch*8), 1320, 1496, 1000, 1500, 1500, 1000]+[1500]*8
     return [f"ATT,{roll:.2f},{pitch:.2f},{yaw:.2f}",
+            f"YAW_STATUS,source=GYRO,valid=0,reason=setup_required,heading={yaw:.2f},mag_heading=0,field=0,innovation=0,configured=0,hold=0,target=0",
             "IMU_CONFIG,model=BMI270,mag=0,error0=0,error1=0,regs0=240100,regs1=240100",
             "IMU_HEALTH,1,1,0,0,1", "BMP_HEALTH,valid=1,error=0",
             "BMI,0.01,0.02,0.998,0.12,-0.05,0.18", "BMP,998.4,24.6,126.5",

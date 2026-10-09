@@ -1,6 +1,6 @@
 # v2.2 hardware and connection guide
 
-**Current assembly, 2026-10-08:** the user identifies both IMUs as **BMI270**. Use the default `v2_bmi270` profile, which disables BMM350 polling and inhibits both motors. Current software and bench observations are recorded in [assembled-board bring-up](ASSEMBLED_BOARD.md). The design notes below are existing reference material, not new physical inspection.
+**Current assembly, 2026-10-08:** the user identifies both IMUs as **BMI270**. Use the default `v2_bmi270` profile, which enables BMM350 polling and inhibits motor authorization. The user reports BMM350 online on 2026-10-09; [heading integration](MAGNETIC_HEADING.md) now requires measured installation calibration. Current software and bench observations are recorded in [assembled-board bring-up](ASSEMBLED_BOARD.md). The design notes below are existing reference material, not new physical inspection.
 
 This pin map was extracted from both `Plane_Board_Design.kicad_sch` and `Plane_Board_Design.kicad_pcb` in the supplied v2.2 project on 2026-09-28. PCB SHA-256: `650df54016c0231be7eda7023f24f1544af7a5d8e15cb844f49c6cadcc7422e5`. The firmware targets this F407VG board.
 
@@ -29,7 +29,7 @@ MCU U26 is **STM32F407VGT6**, with 1 MiB flash. The linker uses 128 KiB ordinary
 | U4 BMI270, primary | SPI1: PA5 SCK, PA6 MISO, PA7 MOSI, PA4 CS | Filtered accel/gyro FIFO, 400 Hz, +/-8 g / +/-2000 deg/s |
 | U7 BMI270, backup | SPI2: PB13 SCK, PB14 MISO, PB15 MOSI, PB12 CS | Independent driver, FIFO, calibration and health |
 | U9 BMP581 | I2C1: PB6 SCL, PB7 SDA, address **0x47** | 50 Hz pressure / temperature; 100 Hz ready polling |
-| U29 BMM350 | I2C2: PB10 SCL, PB11 SDA, address **0x14** | 25 Hz compensated magnetic diagnostics; not flight heading |
+| U29 BMM350 | I2C2: PB10 SCL, PB11 SDA, address **0x14** | 25 Hz compensated acquisition; magnetic heading after installation calibration |
 | BMM350 interrupt | PE12 through R10 | Wired but unused; driver polls ready status |
 | U28 SAM-M10Q | USART2: PA2 MCU TX -> GPS RX through R95; PA3 MCU RX <- GPS TX through R94 | NMEA, initially 38400 baud; passive auto-detection |
 | ER8 through J2 | UART4: PA1 MCU RX, PA0 MCU TX | Uninverted, full-duplex CRSF, 420000 baud, 8N1 |

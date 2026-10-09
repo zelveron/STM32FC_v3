@@ -1,0 +1,2 @@
+# Offline BMM350 calibration tool; not required to run the GUI.
+numpy==2.2.4

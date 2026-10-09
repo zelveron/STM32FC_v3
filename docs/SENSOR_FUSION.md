@@ -17,7 +17,8 @@ flowchart LR
     Q --> C[ASSIST / TKOFF / level failsafe]
     G[SAM-M10Q] --> T[Fresh GNSS telemetry]
     P[BMP581] --> V[Relative pressure altitude + vario]
-    M[BMM350] --> D[Magnetic diagnostics only]
+    M[BMM350] --> D[Installation calibration + tilt compensation + field gates]
+    D --> Q
 ```
 
 ### Sampling and calibration
@@ -53,7 +54,7 @@ The estimator integrates bias-corrected body gyro rates into a quaternion. A Mah
 
 Frames are body **forward/right/down** and world **north/east/down**. The driver applies the PCB mounting rotation, then negates specific force for the gravity-like accelerometer convention. Invalid numeric inputs or invalid estimator time steps invalidate/reset the attitude estimate. Startup attitude needs acceleration magnitude near 1 g.
 
-Long turns and translational accelerations can still corrupt a gravity-only correction; gyro-only intervals drift. A coordinated level turn has increased load factor, and the measured acceleration is not simply an Earth-fixed gravity vector. The current filter does not estimate or subtract aircraft translational acceleration. **Yaw has no absolute reference and can drift.** Do not treat a plausible horizon or heading number as proof of navigation accuracy.
+Long turns and translational accelerations can still corrupt a gravity-only correction; gyro-only intervals drift. A coordinated level turn has increased load factor, and the measured acceleration is not simply an Earth-fixed gravity vector. The current filter does not estimate or subtract aircraft translational acceleration. **Calibrated BMM350 observations reference yaw to magnetic north when qualified; gyro-only fallback can drift.** Do not treat a plausible horizon or heading number as proof of navigation accuracy.
 
 ## How the other sensors are used now
 
@@ -61,7 +62,7 @@ Long turns and translational accelerations can still corrupt a gravity-only corr
 
 **SAM-M10Q:** valid fresh NMEA position, MSL altitude, satellite count, ground speed and course. Data expires after two seconds and explicit invalid-fix messages invalidate it. Initial baud is 38400 with passive alternate-baud discovery. No receiver configuration or baud change is sent. UBX-NAV-PVT, navigation accuracy estimates and velocity fusion remain future work. Ground speed is not airspeed, so the old groundspeed-based coordinated-turn feedforward is disabled.
 
-**BMM350:** official Bosch initialization and compensation, 25 Hz readings, ready polling, finite-value checks and 200 ms freshness. USB `MAG` reports sensor axes. No airframe hard/soft-iron calibration, body alignment/declination correction or magnetic disturbance rejection is complete, so magnetic values do not enter flight control. The board's VDD/pull-up corrections must happen before useful hardware validation.
+**BMM350:** official Bosch initialization and compensation, 25 Hz readings, ready polling, finite-value checks and 200 ms freshness. USB `MAG` reports sensor axes. Installation hard/soft-iron calibration, signed-axis mounting, tilt compensation, field/innovation gates and bounded yaw correction are implemented in `mag_heading`. Measured calibration is not yet installed in this checkout. Once configured and qualified, BMM350 corrects the shared AHRS yaw and enables centered-stick ASSIST heading hold. No declination correction is applied. See [magnetic heading](MAGNETIC_HEADING.md) for acquisition, fallback and calibration.
 
 ## Why not average both IMUs?
 
@@ -75,7 +76,7 @@ The new [SD logger](LOGGING.md) records both IMUs before/after software processi
 
 1. Measure both IMUs stationary, while manually rotated, and under representative motor vibration. Log per-sensor bias, noise, clipping, FIFO age and disagreement to tune thresholds. Preserve exact timestamps before adding blending.
 2. Measure and apply the implemented six-face accelerometer calibration. Add persistent parameters and temperature characterization later, with versioning and CRC.
-3. Validate BMP pressure placement and magnetic hard/soft-iron calibration; measure motor-current interference before fusing BMM350 yaw.
+3. Validate BMP pressure placement and magnetic hard/soft-iron calibration; measure motor-current interference before relying on the implemented BMM350 yaw correction.
 4. Add timestamped UBX navigation data and a tested velocity/attitude estimator. Consider a calibrated pitot/differential-pressure sensor for fixed-wing airspeed, stall margin and future energy control.
 5. Only then add altitude/track control, launch logic, loiter/waypoints and return-to-home with explicit navigation and energy failsafes.
 

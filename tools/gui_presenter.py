@@ -36,6 +36,26 @@ class DashboardPresenter:
         self.metrics["sats"].set(sats if sats>=0 else "—",fix_name(gpsh["fix"]) if gpsh and gpsh["nmea"] else fix_name(gps["fix"]) if gps else "No current fix status")
         for widget in (self.horizon,self.aircraft): widget.attitude=attitude; widget.update()
         for i,key in enumerate(("roll","pitch","yaw")): self.att_labels[key].setText(f"{attitude[i]:+.1f}°" if attitude else "—")
+        yaw=live("YAW_STATUS") if attitude else None
+        reason={"disabled":"Magnetometer disabled", "setup_required":"Compass setup required",
+                "waiting":"Waiting for magnetic samples", "no_attitude":"Attitude unavailable",
+                "field_rejected":"Magnetic field rejected", "innovation_rejected":"Heading innovation rejected",
+                "qualifying":"Checking magnetic samples", "aligning":"Aligning magnetic heading",
+                "tracking":"Magnetic north reference", "stale":"Magnetic data stale",
+                "driver_unavailable":"BMM350 data unavailable"}
+        if yaw and yaw["source"] != "NONE":
+            magnetic=yaw["source"]=="BMM350"
+            self.yaw_title.setText("MAGNETIC HEADING" if magnetic else "GYRO YAW / COASTING")
+            self.att_labels["yaw"].setText(f"{attitude[2]%360:.1f}°")
+            self.yaw_source.setText(("Source: BMM350 + gyro" if magnetic else "Source: gyro fallback")+"\n"+reason[yaw["reason"]])
+            holding=bool(yaw["hold"] and mode and mode["active"]=="ASSIST" and mode["armed"] and mode["flying"] and not mode["failsafe"])
+            self.heading_hold_status.setText(f"Holding {yaw['target']:.1f}° magnetic" if holding else "Heading hold: ready / pilot control" if yaw["valid"] else "Heading hold unavailable")
+            self.heading_details.setText(f"{reason[yaw['reason']]}\nCalibration: {'installed' if yaw['configured'] else 'required'}\nField {yaw['field']:.2f} µT · innovation {yaw['innovation']:+.1f}°\nMagnetic heading is not true north or GPS ground track.")
+        else:
+            self.yaw_title.setText("HEADING / YAW")
+            self.yaw_source.setText("Source unavailable / stale")
+            self.heading_hold_status.setText("Heading hold unavailable")
+            self.heading_details.setText("Heading source unavailable / stale. A healthy BMM350 alone does not prove heading fusion is active.")
         self.track.points=list(m.track); self.track.live=bool(gps); self.track.update()
         self.gps_position.setText(f"{gps['lat']:.6f}°\n{gps['lon']:.6f}°" if gps else "No valid position")
         gh=m.health("gps",online); visibility={-1:"Visibility unknown",0:"No satellites reported in view",1:"Satellites in view"}

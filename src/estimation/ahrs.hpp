@@ -9,8 +9,8 @@
 // force vector. When the accel is not trusted the estimate coasts on the
 // (bias-corrected) gyro.
 //
-// Yaw is unreferenced and can drift. GNSS course is reported separately; it
-// is not body heading and is not fused here. See docs/SENSOR_FUSION.md.
+// Gyro yaw is referenced by accepted BMM350 observations through correct_yaw.
+// Without them it coasts and can drift. GNSS course is never body heading.
 //
 // Frame: body FRD, world NED. +roll = right wing down, +pitch = nose up,
 // +yaw = clockwise from above. State is radians.
@@ -38,6 +38,8 @@ void update(float ax_g, float ay_g, float az_g,
 float roll_rad();
 float pitch_rad();
 float yaw_rad();
+// Apply a validated world-Z rotation without disturbing roll, pitch or bias.
+void correct_yaw(float delta_rad);
 
 // --- diagnostics ---
 void  gyro_bias_dps(float& bx, float& by, float& bz);

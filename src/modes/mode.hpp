@@ -25,6 +25,8 @@ struct ModeInput {
     float gyro_p_dps = 0.0f, gyro_q_dps = 0.0f, gyro_r_dps = 0.0f;
     float airspeed_mps = 0.0f;
     bool airspeed_valid = false; // actual airspeed only, never GPS groundspeed
+    bool heading_valid = false; // fresh, aligned magnetic reference, not gyro-only yaw
+    bool allow_heading_hold = false; // airborne, armed, healthy RC; false in failsafe
 
     // false -> stabilizer integrators frozen (aircraft on the ground: a steady
     // attitude error would otherwise wind the rate-loop I term to its rail).

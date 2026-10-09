@@ -108,6 +108,16 @@ uint16_t            s_out_us[8] = { 0,0,0,0,0,0,0,0 }; // last pulses, for OUT,
 modes::Id           s_mode_req  = modes::Id::manual;   // requested via ch7
 core::LogRing       s_log_ring;                        // binary log producers -> SD
 estimation::BaroAlt s_baro_alt;                        // ground-referenced altitude
+estimation::MagHeading s_heading{config::mag_heading_config()};
+
+bool magnetic_driver_healthy() {
+    return config::enable_magnetometer&&mag350::healthy()&&mag350::diagnostics().stage==0;
+}
+bool heading_attitude_valid() { return imu_v2::healthy()&&imu_v2::bias_ready(); }
+float heading_degrees(float radians) {
+    float deg=fmodf(radians*kRadToDeg,360.0f);
+    return deg<0?deg+360.0f:deg;
+}
 float               g_alt_agl_m  = 0.0f;
 float               g_climb_mps  = 0.0f;               // filtered dAGL/dt, for the CRSF vario
 
@@ -282,6 +292,8 @@ void task_control()   // 400 Hz -- CRSF -> arming/failsafe -> mode -> mixer -> P
     mi.gyro_q_dps   = g_gy;
     mi.gyro_r_dps   = g_gz;
     mi.airspeed_mps = 0.0f; mi.airspeed_valid=false; // no pitot fitted
+    mi.heading_valid=s_heading.heading_valid(millis(),heading_attitude_valid(),magnetic_driver_healthy());
+    mi.allow_heading_hold=armed&&s_flying&&!s_failsafe.active();
     mi.allow_integrators = s_flying;
     s_mode_active->update(mi, s_out);
 
@@ -309,16 +321,20 @@ void task_bmi() // 400 Hz FIFO service, both BMI270s
     g_ax=p.ax_g; g_ay=p.ay_g; g_az=p.az_g;
     g_gx=p.gx_dps; g_gy=p.gy_dps; g_gz=p.gz_dps;
     if(imu_v2::healthy()) s_att_last_us=micros();
+    if(!heading_attitude_valid()) s_heading.invalidate_attitude();
 }
 void task_mag()
 {
     if(!config::enable_magnetometer) return;
     mag350::Sample m;
     if(mag350::poll(m)) {
+        const float correction=s_heading.observe(m.x_ut,m.y_ut,m.z_ut,
+            ahrs::roll_rad(),ahrs::pitch_rad(),ahrs::yaw_rad(),heading_attitude_valid(),
+            !s_flight_session,millis());
+        ahrs::correct_yaw(correction);
         L().print(F("MAG,")); L().print(m.x_ut,2); L().print(',');
         L().print(m.y_ut,2); L().print(','); L().println(m.z_ut,2);
-    }
-    // No uncalibrated magnetic heading is fused into flight control.
+    } else if(!magnetic_driver_healthy()) s_heading.driver_failed();
 }
 
 void task_stream()   // 20 Hz -- all the high-rate USB echo, off the control path
@@ -546,6 +562,20 @@ void task_debug()   // 2 Hz -- low-rate status lines (no blocking calls here)
         L().print(F(",last_reg=")); L().print(md.last_error_register);
         L().print(F(",status=")); L().print(md.status);
         L().print(F(",samples=")); L().println(md.samples);
+        const bool attitude_ok=heading_attitude_valid(),mag_ok=magnetic_driver_healthy();
+        const bool mag_aiding=s_heading.aiding(now,attitude_ok,mag_ok);
+        const bool heading_ok=s_heading.heading_valid(now,attitude_ok,mag_ok);
+        const bool hold=s_mode_cur==modes::Id::assist&&s_mode_assist.heading_hold()&&heading_ok;
+        L().print(F("YAW_STATUS,source=")); L().print(!attitude_ok?"NONE":mag_aiding?"BMM350":"GYRO");
+        L().print(F(",valid=")); L().print(heading_ok?1:0);
+        L().print(F(",reason=")); L().print(estimation::MagHeading::state_name(s_heading.state(now,attitude_ok,mag_ok)));
+        L().print(F(",heading=")); L().print(heading_degrees(ahrs::yaw_rad()),1);
+        L().print(F(",mag_heading=")); L().print(heading_degrees(s_heading.measured_rad()),1);
+        L().print(F(",field=")); L().print(s_heading.field_ut(),2);
+        L().print(F(",innovation=")); L().print(s_heading.innovation_rad()*kRadToDeg,1);
+        L().print(F(",configured=")); L().print(s_heading.configured()?1:0);
+        L().print(F(",hold=")); L().print(hold?1:0);
+        L().print(F(",target=")); L().println(hold?heading_degrees(s_mode_assist.heading_target_rad()):0,1);
         // Continuous health even with no fix/no receiver and for late GUI joins.
         L().print(F("GPS_HEALTH,rx=")); L().print(ublox::receiving()?1:0);
         L().print(F(",nmea=")); L().print(ublox::nmea_valid()?1:0);

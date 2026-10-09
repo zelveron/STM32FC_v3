@@ -526,3 +526,19 @@ Bosch's configuration image independently on each SPI bus, allow measurement
 startup to settle, then flush the FIFO before accepting paired samples. Expose
 per-device initialization errors and persistent GNSS communication/satellite
 health in USB telemetry and the standalone Windows x64 dashboard.
+
+**2026-10-09 — BMM350 magnetic yaw and ASSIST heading hold.** The user reports
+BMM350 online and requests it as the heading reference with GUI source status.
+Keep the existing Bosch acquisition path and selected-IMU AHRS; apply calibrated,
+tilt-compensated world-yaw corrections after field/innovation/freshness checks.
+Use pre-arm alignment and bounded airborne convergence, with gyro fallback.
+Centered roll/rudder captures heading after settling in armed airborne ASSIST;
+the heading loop requests at most 15 degrees bank. Pilot input, lost compass,
+disarm and RC failsafe release hold. Existing throttle and fault behavior stay
+intact. Add YAW_STATUS and GUI source/hold/rejection indicators.
+
+No mounting or hard/soft-iron measurements were supplied. Add an offline
+ellipsoid/axis-mapping tool and explicit configuration gate instead of inventing
+coefficients. Default v2_bmi270 now enables BMM350 acquisition and retains motor
+inhibition. See MAGNETIC_HEADING.md for calibration, gates and limits. No board
+was flashed for this change.

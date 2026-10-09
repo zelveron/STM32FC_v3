@@ -26,7 +26,7 @@ No in-flight PID tuning, parameter upload, waypoint upload, calibration command,
 
 | CRSF group/type | Fields currently sent | Configured maximum generation rate | Notes |
 |---|---|---|---|
-| Attitude `0x1E` | Pitch, roll, relative yaw | 10 Hz / 100 ms | Radians on the wire. Yaw has no compass reference and can drift. One compound frame. |
+| Attitude `0x1E` | Pitch, roll, fused yaw | 10 Hz / 100 ms | Radians on the wire. Yaw uses qualified magnetic aiding when available, otherwise gyro coasting. USB `YAW_STATUS` identifies its source; CRSF has no source field. One compound frame. |
 | Vario `0x07` | Vertical speed | 10 Hz / 100 ms | m/s, positive up; barometer-derived and filtered. |
 | GPS `0x02` | Latitude, longitude, groundspeed, course over ground, MSL altitude, satellite count | At most 2.5 Hz / 400 ms; new timed GGA fixes only | Six fields in one compound frame. Course is not nose heading; groundspeed is not airspeed. Zero speed/course can mean unavailable RMC data. |
 | Flight mode `0x21` | Mode/arming/development/fault text | 2.5 Hz / 400 ms periodically; changes prioritized, at most 10 Hz | Labels below. Actual delivery remains limited by the RF link. |
@@ -59,6 +59,6 @@ No battery voltage/current/consumed mAh/remaining percentage is scheduled. A bat
 
 ## Deciding what to reduce later
 
-Keep control channels CH1-5 and CH7. For return telemetry, mode/fault state and ELRS link quality are useful first priorities. Keep GPS if recovery/location and ground-track information matter. Vario can be reduced or disabled if climb/descent indications are unused. Attitude is the first candidate to reduce if no artificial-horizon widget is used; its yaw is currently relative. No reductions have been applied yet.
+Keep control channels CH1-5 and CH7. For return telemetry, mode/fault state and ELRS link quality are useful first priorities. Keep GPS if recovery/location and ground-track information matter. Vario can be reduced or disabled if climb/descent indications are unused. Attitude is the first candidate to reduce if no artificial-horizon widget is used; its yaw may be magnetic or gyro-coasting; check the USB source status. No reductions have been applied yet.
 
 References: [ExpressLRS Lua packet-rate/telemetry settings](https://www.expresslrs.org/quick-start/transmitters/lua-howto/), [telemetry bandwidth](https://www.expresslrs.org/info/telem-bandwidth/), [switch/channel modes](https://www.expresslrs.org/software/switch-config/). Air telemetry opportunities are shared between link and data traffic; they are not individual sensor update rates.

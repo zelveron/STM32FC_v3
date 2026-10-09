@@ -24,6 +24,8 @@ std::string usb_command;
 Print sink;
 bool imu_ok=true,imu_bias=true; unsigned sd_calls=0;
 bool bmp_sample = false;
+bool mag_ok=false,mag_sample=false;
+mag350::Sample magnetic{0,-30,40,20};
 float bmp_pa = 101325.0f;
 int repros = 0;
 int observations = 0;
@@ -128,7 +130,9 @@ uint32_t driver_health_registers(unsigned){return 0;}
 const estimation::ImuSample& latest(){static estimation::ImuSample s{};return s;}
 }
 namespace mag350 {
-bool begin(){return true;} bool poll(Sample&){return false;} bool healthy(){return false;}
+bool begin(){return true;}
+bool poll(Sample& s){if(!mock::mag_sample)return false;mock::mag_sample=false;s=mock::magnetic;return true;}
+bool healthy(){return mock::mag_ok;}
 const Diagnostics& diagnostics(){static Diagnostics d{};return d;}
 }
 int failures=0,checks=0;
@@ -352,5 +356,31 @@ int main() {
     s_flight_session=true;s_control_fault=false;
     now_us+=50000;task_control();
     check("control deadline fault inhibits motors",s_control_fault&&!s_arming.armed()&&pwm[2]==1000);
+
+    // Exercise the production sensor task and shared AHRS, not just the validator.
+    estimation::MagHeadingConfig magnetic_config;
+    magnetic_config.orientation_confirmed=magnetic_config.calibrated=true;
+    s_heading.configure(magnetic_config);s_flight_session=false;
+    imu_ok=imu_bias=mag_ok=true;
+    ahrs::reset();ahrs::update(0,0,1,0,0,0,.0025f);
+    for(int n=0;n<20;++n){now_us+=40000;mag_sample=true;task_mag();}
+    check("mag task aligns shared AHRS to magnetic east before first arming",
+          std::fabs(ahrs::yaw_rad()-1.5707963f)<.001f&&
+          s_heading.heading_valid(millis(),heading_attitude_valid(),magnetic_driver_healthy()));
+    now_us+=200000;
+    check("application magnetic heading expires without new samples",
+          !s_heading.heading_valid(millis(),heading_attitude_valid(),magnetic_driver_healthy()));
+    mag_ok=false;task_mag();
+    check("application driver loss preserves gyro attitude and removes magnetic aid",
+          ahrs::valid()&&!s_heading.aiding(millis(),heading_attitude_valid(),magnetic_driver_healthy()));
+    imu_bias=false;task_bmi();
+    check("application bias loss resets compass alignment",
+          !s_heading.heading_valid(millis(),heading_attitude_valid(),true));
+    imu_bias=mag_ok=true;s_flight_session=true;
+    ahrs::reset();ahrs::update(0,0,1,0,0,0,.0025f);
+    for(int n=0;n<20;++n){now_us+=40000;mag_sample=true;task_mag();}
+    check("first magnetic acquisition after arming cannot jump shared yaw",
+          ahrs::yaw_rad()>0&&ahrs::yaw_rad()<.04f&&
+          !s_heading.heading_valid(millis(),heading_attitude_valid(),magnetic_driver_healthy()));
     std::printf("%d checks, %d failures\n",checks,failures);return failures?1:0;
 }

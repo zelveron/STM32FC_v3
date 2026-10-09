@@ -126,10 +126,11 @@ exact code revision; this later note records the physical programming result.
 ### Available build profiles
 
 Use `pio run` or `pio run -e v2_bmi270`. BMI270 is the only IMU implementation.
-The default profile disables magnetometer polling (`FC_MAG_ENABLED=0`) and
-inhibits both motors (`FC_FLIGHT_ENABLED=0`). The optional `v2` profile also uses
-BMI270, with BMM350 support enabled. Sensor transforms, control selection,
-failsafe behavior and motor gates have not been changed by this update.
+As of 2026-10-09 the default profile enables magnetometer polling (`FC_MAG_ENABLED=1`) and
+inhibits motor authorization (`FC_FLIGHT_ENABLED=0`). Magnetic yaw/hold requires measured installation calibration; see [MAGNETIC_HEADING.md](MAGNETIC_HEADING.md). The optional `v2` profile also uses
+BMI270, with BMM350 support enabled. IMU transforms, IMU selection,
+failsafe behavior and motor gates remain unchanged. Magnetic heading and
+ASSIST hold are described separately in the heading guide.
 
 `v2_flight` is an explicit alias of the full motor-enabled `v2_motor_test`
 application. It enables CH5 motor authorization while preserving low-throttle

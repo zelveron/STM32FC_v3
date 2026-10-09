@@ -92,5 +92,29 @@ class DashboardTests(unittest.TestCase):
         with patch.object(w.session, "start") as start: w.finish_transition()
         start.assert_not_called()
 
+    def test_heading_source_is_explicit_and_expires(self):
+        w=self.window; clock=[10.0]; w.model=Telemetry(lambda:clock[0]); w.link_open=True
+        for line in frame(0): w.model.feed(line)
+        w.model.feed("YAW_STATUS,source=BMM350,valid=1,reason=tracking,heading=90,mag_heading=90,field=50,innovation=0,configured=1,hold=0,target=0")
+        w.render(); self.assertIn("BMM350 + gyro",w.yaw_source.text())
+        self.assertEqual(w.yaw_title.text(),"MAGNETIC HEADING")
+        w.model.feed("MODE,active=ASSIST,req=ASSIST,armed=1,failsafe=0,flying=1")
+        w.model.feed("YAW_STATUS,source=BMM350,valid=1,reason=tracking,heading=90,mag_heading=90,field=50,innovation=0,configured=1,hold=1,target=90")
+        w.render();self.assertIn("Holding 90.0°",w.heading_hold_status.text())
+        w.model.feed("MODE,active=ASSIST,req=ASSIST,armed=1,failsafe=1,flying=1")
+        w.render();self.assertNotIn("Holding",w.heading_hold_status.text())
+        w.model.feed("YAW_STATUS,source=GYRO,valid=0,reason=field_rejected,heading=90,mag_heading=0,field=100,innovation=90,configured=1,hold=0,target=0")
+        w.render(); self.assertIn("gyro fallback",w.yaw_source.text())
+        self.assertIn("rejected",w.yaw_source.text())
+        self.assertIn("unavailable",w.heading_hold_status.text())
+        clock[0]+=3.1; w.render(); self.assertIn("stale",w.yaw_source.text())
+
+    def test_online_magnetometer_does_not_invent_heading_source(self):
+        w=self.window; w.link_open=True
+        for line in frame(0): w.model.feed(line)
+        del w.model.records["YAW_STATUS"]
+        w.model.feed("MAG,30,0,40")
+        w.render(); self.assertIn("unavailable",w.yaw_source.text())
+
 
 if __name__ == "__main__": unittest.main()

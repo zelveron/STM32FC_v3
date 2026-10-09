@@ -2,7 +2,7 @@
 
 Current behavior and hardware are documented in README.md and docs/HARDWARE_V2.md. The user authorized the v2 hardware migration; historical v1 constraints are archived in docs/history/CLAUDE-v1.md and do not define the new board.
 
-Current card confirmed 2026-10-08: dual BMI270 is the only supported IMU configuration. The default `v2_bmi270` profile disables the magnetometer and inhibits motor arming. The optional `v2` profile enables BMM350 support. Current bench evidence is in docs/ASSEMBLED_BOARD.md; do not substitute older assembly results.
+Current card confirmed 2026-10-08: dual BMI270 is the only supported IMU configuration. The default `v2_bmi270` profile enables BMM350 acquisition and inhibits motor arming. Magnetic fusion requires measured installation calibration; see docs/MAGNETIC_HEADING.md. The user reports BMM350 online on 2026-10-09. Current bench evidence is in docs/ASSEMBLED_BOARD.md; do not substitute older assembly results.
 
 Current aircraft output layout: SERVO1 aileron, SERVO2 elevator, SERVO3 throttle, SERVO4 rudder, SERVO6 reversed aileron. SERVO5 remains centered and SERVO8/9 remain at 1000 us. Motor safety classification includes SERVO3; never apply surface transition smoothing to it.
 
@@ -12,4 +12,4 @@ Keep sensor/control modules portable through hal.hpp. Arduino boundaries remain 
 
 Use the exact Bosch APIs and configuration image with their license/provenance files. Do not copy ArduPilot source. Do not change transmitter assignments, sensor axes, failsafe semantics or motor gating without updating the corresponding documentation and behavioral regressions.
 
-Run tools/test_host.ps1 for control/driver changes and compile the v2 target. Do not treat passing simulation as airframe gain validation. Do not flash connected hardware without a user request for flashing. Never put credentials in source, command output or repository configuration.
+Run tools/test_host.ps1 on Windows or the equivalent tools/test_host.py on Linux for control/driver changes, and compile the v2 target. Run tests/mag_calibration.py when changing the compass calibration tool. Do not treat passing simulation as airframe gain validation. Do not flash connected hardware without a user request for flashing. Never put credentials in source, command output or repository configuration.

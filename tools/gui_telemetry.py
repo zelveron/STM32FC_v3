@@ -8,7 +8,7 @@ import time
 TTL = {"ATT": .35, "BMI": .35, "BMP": .35, "MAG": .5, "RC": .5, "OUT": .5,
        "MODE": 1.5, "LINK": 1.5, "GPS": 2.5, "GPS_STAT": 2.5, "GPS_HEALTH": 3,
        "SD_DBG": 12, "IMU_CONFIG": 3, "IMU_HEALTH": 3, "BMP_HEALTH": 3,
-       "CRSF_STAT": 3, "EST": 3, "TELEM": 3}
+       "CRSF_STAT": 3, "EST": 3, "TELEM": 3, "YAW_STATUS": 3, "MAG_HEALTH": 3}
 
 
 @dataclass(frozen=True)
@@ -132,6 +132,27 @@ class Telemetry:
                 value = {"valid": int(kv["valid"]), "error": int(kv["error"])}
                 if value["valid"] not in (0, 1):
                     raise ValueError("barometer flag")
+            elif tag == "YAW_STATUS":
+                value = dict(kv)
+                if kv["source"] not in ("NONE", "GYRO", "BMM350"):
+                    raise ValueError("yaw source")
+                if kv["reason"] not in ("disabled", "setup_required", "waiting", "no_attitude",
+                        "field_rejected", "innovation_rejected", "qualifying", "aligning",
+                        "tracking", "stale", "driver_unavailable"):
+                    raise ValueError("yaw state")
+                for k in ("valid", "configured", "hold"):
+                    value[k] = int(kv[k])
+                    if value[k] not in (0, 1): raise ValueError("yaw flag")
+                for k in ("heading", "mag_heading", "field", "innovation", "target"):
+                    value[k] = float(kv[k])
+                    if not math.isfinite(value[k]): raise ValueError("yaw value")
+                if any(not 0 <= value[k] <= 360 for k in ("heading", "mag_heading", "target")) or value["field"] < 0 or abs(value["innovation"]) > 180:
+                    raise ValueError("heading range")
+                if value["valid"] and (value["source"] != "BMM350" or not value["configured"] or value["reason"] != "tracking"):
+                    raise ValueError("heading eligibility")
+                if value["source"] == "BMM350" and (not value["configured"] or value["reason"] not in ("aligning", "tracking")):
+                    raise ValueError("magnetic source without qualified calibration")
+                if value["hold"] and not value["valid"]: raise ValueError("hold without heading")
             elif tag == "MODE":
                 value = {"active": kv["active"], "req": kv["req"]}
                 for k in ("armed", "failsafe", "assist_lockout", "flight_enabled", "flying", "timing_fault"):
@@ -252,4 +273,4 @@ class Telemetry:
             return Health("ok" if h["active"] else "warn", "Recording" if h["active"] else "Inactive", h["file"] if h["active"] else "No active SD log; card presence is not reported")
         if not h["mag"]:
             return Health("off", "Disabled", "Magnetometer disabled by firmware configuration")
-        return Health("ok" if self.get("MAG") else "stale", "Streaming" if self.get("MAG") else "No sample", "BMM350; not fused into heading")
+        return Health("ok" if self.get("MAG") else "stale", "Streaming" if self.get("MAG") else "No sample", "BMM350 measurements; see heading source for fusion status")

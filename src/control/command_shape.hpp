@@ -18,6 +18,10 @@ struct AssistTuning {
     float surface_rate_per_s=12; // normalized travel/s; verify real servo response
     float transition_s=.25f;
     float yaw_damper_limit=.25f;
+    bool heading_hold_enabled=true;
+    float heading_bank_per_rad=.5f; // heading error -> shallow corrective bank
+    float heading_bank_limit_rad=.2617994f; // 15 degrees, also limited by max roll
+    float heading_stick_deadband=.05f, heading_capture_s=.5f;
     float reference_airspeed_mps=18;
     float min_airspeed_mps=8, max_airspeed_mps=50;
 };

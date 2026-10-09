@@ -6,11 +6,11 @@ Custom flight-controller firmware for RC fixed-wing aircraft, targeting the **ma
 
 **v3 is the software repository generation; v2.2 is the PCB revision.** PlatformIO profiles retain their `v2` names to identify that board. This project continues [STM32FC_v2](https://github.com/zelveron/STM32FC_v2); older board instructions are archived in [docs/history](docs/history/README-v1.md).
 
-> **Status — 2026-10-08:** Both BMI270s and BMP581 produce healthy data on the current board. ER8 CRSF reception works after correcting the J2 TX/RX wiring; the FC sends attitude, vario and mode telemetry. GNSS has obtained a position fix. BMM350 initialization still fails on I2C2 and remains a hardware investigation item. `v2_flight` is the full MANUAL/ASSIST/TKOFF firmware with CH5 motor authorization; the default build retains motor inhibition. These are bench observations, not flight qualification. See [current results](docs/ASSEMBLED_BOARD.md).
+> **Status — 2026-10-08:** Both BMI270s and BMP581 produce healthy data on the current board. ER8 CRSF reception works after correcting the J2 TX/RX wiring; the FC sends attitude, vario and mode telemetry. GNSS has obtained a position fix. The user reports BMM350 online on 2026-10-09. Magnetic yaw fusion, ASSIST heading hold and GUI source reporting are now implemented; measured installation calibration is still required. See [magnetic heading setup](docs/MAGNETIC_HEADING.md). `v2_flight` is the full MANUAL/ASSIST/TKOFF firmware with CH5 motor authorization; the default build retains motor inhibition. These are bench observations, not flight qualification. See [current results](docs/ASSEMBLED_BOARD.md).
 
 ## Current card — 2026-10-08
 
-The user identified the card connected to the Raspberry Pi as the **BMI270** assembly. The default environment in this checkout is now **`v2_bmi270`**, using the existing dual-BMI270 driver. It preserves the previous profile's disabled magnetometer and motor inhibition (`FC_MAG_ENABLED=0`, `FC_FLIGHT_ENABLED=0`). Build with `pio run` or `pio run -e v2_bmi270`. BMI270 is the only supported IMU; the legacy driver, vendor library and build profile have been removed.
+The user identified the card connected to the Raspberry Pi as the **BMI270** assembly. The default environment in this checkout is now **`v2_bmi270`**, using the existing dual-BMI270 driver. It enables BMM350 acquisition while preserving motor inhibition (`FC_MAG_ENABLED=1`, `FC_FLIGHT_ENABLED=0`). Magnetic fusion is gated on measured calibration. Build with `pio run` or `pio run -e v2_bmi270`. BMI270 is the only supported IMU; the legacy driver, vendor library and build profile have been removed.
 
 The BMI270 path runs Bosch's reset/SPI-selection sequence and uploads all 8192 configuration bytes independently to each IMU. Initialization uses 1 MHz SPI, then waits 80 ms after enabling measurement before switching to 5 MHz FIFO service and flushing startup frames. This covers the gyroscope's documented 45 ms startup; without settling, dummy FIFO frames can latch the strict paired-frame parser as failed. See the [Bosch BMI270 datasheet](https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmi270-ds000.pdf), sections 1 and 4.4. Runtime FIFO, freshness, clipping and failover checks remain active.
 
@@ -55,12 +55,12 @@ This table describes code present in the repository. Physical validation is a se
 | Area | Implemented | Current boundary |
 |---|---|---|
 | MANUAL | Direct pilot surface/throttle commands through the mixer | Motor authorization still applies; direct control needs no IMU |
-| ASSIST | Roll/pitch angle control, rate controllers, trim, turn geometry and rudder damping | Pilot throttle; no altitude, speed, position or heading hold |
+| ASSIST | Roll/pitch angle control, rate controllers, rudder damping and optional magnetic heading hold | Pilot throttle; no altitude, speed or position hold; heading requires calibrated BMM350 |
 | TKOFF | Wing leveling with limited bank demand | Pilot pitch, rudder and throttle; no automatic launch sequence |
 | Outputs | SERVO1 aileron, SERVO2 elevator, SERVO3 throttle, SERVO4 rudder, SERVO6 reversed aileron | Standard PWM; endpoints/directions require aircraft setup |
 | IMUs | Two BMI270 drivers, 400 Hz FIFO processing, individual calibration/filtering/health | Primary/backup selection, one attitude estimator |
-| Attitude | Quaternion Mahony-style fusion, gravity trust gates, bounded bias correction | Relative yaw; no absolute heading or navigation EKF |
-| Other sensors | BMP581 pressure/vario, SAM-M10Q GNSS, BMM350 compensated diagnostics | GNSS/magnetometer are not fused into attitude |
+| Attitude | Quaternion gyro/gravity fusion plus gated BMM350 yaw correction | Gyro fallback without qualified compass; no navigation EKF |
+| Other sensors | BMP581 pressure/vario, SAM-M10Q GNSS, BMM350 calibrated heading support | GNSS is not fused into attitude |
 | RC/failsafe | CRSF, arming checks, link-loss throttle cut and level/center response | Automatic throttle recovery after stable reception, as selected for this aircraft |
 | Telemetry | CRSF attitude, vario, GPS and mode; USB diagnostics | Radio refresh depends on ELRS settings/link |
 | Logging | Bounded ring, preallocated FAT32 file, asynchronous SDIO DMA | Boot allocation can block; physical card qualification pending |
@@ -82,7 +82,7 @@ The GPIO map was checked against the supplied v2.2 KiCad schematic and PCB. The 
 | Primary IMU U4 | Bosch BMI270 on SPI1 | 400 Hz paired accel/gyro FIFO, +/-8 g and +/-2000 deg/s |
 | Backup IMU U7 | Bosch BMI270 on SPI2 | Independent driver, calibration and health |
 | Barometer U9 | Bosch BMP581 | 50 Hz pressure/temperature, relative pressure altitude and vario |
-| Magnetometer U29 | Bosch BMM350 | 25 Hz compensated diagnostics; not heading fusion |
+| Magnetometer U29 | Bosch BMM350 | 25 Hz acquisition; calibrated magnetic yaw aiding |
 | GNSS U28 | u-blox SAM-M10Q | NMEA position, ground speed, course, MSL altitude, satellites |
 | microSD | SDIO, FAT32, 512-byte sectors | Preallocated flight logs |
 | Other storage | W25Q16 U3; 24AA32 U5 | W25Q16 unused/deselected; 24AA32 is GNSS-side, not MCU parameter storage |
@@ -182,7 +182,7 @@ Loss of healthy attitude during stabilization latches a MANUAL fallback until re
 
 Each BMI270 receives the official Bosch configuration image and maintains its own driver, FIFO, calibration, filters and health state. Both run at 400 Hz, processing every complete sample in a FIFO batch. Each gyro independently calibrates from 1600 stationary samples; movement, invalid samples or acceleration outside the stationary gate restart the window. Startup calibration stops after first arming for that boot.
 
-The selected IMU feeds one quaternion Mahony-style estimator. Acceleration magnitude, body rate and gravity-direction innovation limit accelerometer correction during maneuvers. Additional quiet-window gates bound residual gyro-bias learning. Yaw is relative and drifts: **BMM350 and GNSS are not fused into attitude**.
+The selected IMU feeds one quaternion Mahony-style estimator. Acceleration magnitude, body rate and gravity-direction innovation limit accelerometer correction during maneuvers. Additional quiet-window gates bound residual gyro-bias learning. A calibrated, qualified BMM350 supplies the magnetic yaw reference; otherwise yaw coasts on the gyro and can drift. GNSS is not fused into attitude. Centered-stick ASSIST can hold magnetic heading when armed and airborne; see [setup and fallback behavior](docs/MAGNETIC_HEADING.md).
 
 U4 is primary; healthy calibrated U7 can take over if U4 becomes unhealthy, retaining attitude and clearing residual bias from the previous sensor. It does not automatically switch back that boot. Persistent disagreement between otherwise valid sensors latches ambiguity, since two sensors cannot establish a majority winner.
 
@@ -202,7 +202,7 @@ TX -> ER8 -> FC carries the pilot channels above. FC -> ER8 -> TX sends these CR
 
 | Frame | Data | Target |
 |---|---|---|
-| Attitude `0x1E` | Pitch, roll, relative yaw | 100 ms / 10 Hz |
+| Attitude `0x1E` | Pitch, roll, yaw (magnetic aiding or gyro fallback) | 100 ms / 10 Hz |
 | Vario `0x07` | Filtered pressure vertical speed | 100 ms / 10 Hz |
 | GPS `0x02` | Latitude, longitude, ground speed, course, MSL altitude, satellites | At most 400 ms / 2.5 Hz; new timed valid fixes only |
 | Mode `0x21` | Actual mode, bench/disarm/fault label | 400 ms / 2.5 Hz periodic; prioritized changes at most 10 Hz |
@@ -220,7 +220,7 @@ python -m pip install PySide6-Essentials==6.8.3 pyserial==3.5 numpy
 python tools/gui.py --port COM7
 ```
 
-Replace `COM7` with the board's actual port. The GUI displays attitude, dual-IMU health, pressure, GNSS, RC and outputs, and expires stale data. USB also reports estimator, telemetry-budget, scheduler and SD diagnostics. Magnetic axes are compensated sensor data, not calibrated aircraft heading. Newline-terminated `RESET_STATS` clears scheduler counters. `dfu` (alias `REBOOT_BL`) enters ROM DFU through a clean reset; the GUI also has an **Enter DFU** button. Disarm/idle and post-flight RC recovery gates apply; see [USB firmware updates](docs/DFU.md). See the [feature catalog](docs/FEATURES.md) for tags and fault labels.
+Replace `COM7` with the board's actual port. The GUI displays attitude, dual-IMU health, pressure, GNSS, RC and outputs, and expires stale data. USB also reports estimator, telemetry-budget, scheduler and SD diagnostics. `MAG` axes remain compensated sensor data. `YAW_STATUS` reports actual yaw source, magnetic qualification and ASSIST hold state; the GUI distinguishes magnetic heading from gyro fallback. Newline-terminated `RESET_STATS` clears scheduler counters. `dfu` (alias `REBOOT_BL`) enters ROM DFU through a clean reset; the GUI also has an **Enter DFU** button. Disarm/idle and post-flight RC recovery gates apply; see [USB firmware updates](docs/DFU.md). See the [feature catalog](docs/FEATURES.md) for tags and fault labels.
 
 ## Non-blocking SD logging
 
@@ -260,7 +260,7 @@ pio run -e crsf_probe
 
 | Environment | Purpose | Result |
 |---|---|---|
-| `v2_bmi270` (default) | Current dual-BMI270 card, magnetometer disabled | Motor-inhibited bench firmware; `.pio/build/v2_bmi270/firmware.bin` |
+| `v2_bmi270` (default) | Current dual-BMI270 card, BMM350 acquisition enabled | Motor-inhibited bench firmware; `.pio/build/v2_bmi270/firmware.bin` |
 | `v2` (optional BMM350) | BMI270 development with magnetometer support enabled | `.pio/build/v2/firmware.bin`; `FC_FLIGHT_ENABLED=0`, SERVO3 throttle and reserved ESC headers at minimum |
 | `v2_motor_test` | Explicit motor-enabled qualification | `FC_FLIGHT_ENABLED=1`; select only after electrical/motor-disabled checks |
 | `v2_flight` | Full motor-enabled flight firmware | Same application as `v2_motor_test`: MANUAL/ASSIST/TKOFF, CH5 arm, CH7 mode, CRSF/USB and SD logging |
@@ -332,7 +332,7 @@ These are outstanding milestones, not completed features or a release schedule. 
 
 - [ ] Add versioned persistent parameters with validation and migration/reset behavior.
 - [ ] Improve FIFO timestamp alignment, temperature calibration and characterization of IMU failover.
-- [ ] Calibrate BMM350 in the aircraft and reject magnetic interference before heading fusion.
+- [ ] Measure and install BMM350 calibration using [the implemented calibration tool](docs/MAGNETIC_HEADING.md), then validate heading and interference rejection in the aircraft.
 - [ ] Add timestamped GNSS velocity/accuracy, receiver configuration and validated navigation fusion; evaluate an EKF when justified.
 - [ ] Integrate a calibrated, health-checked airspeed sensor before relying on airspeed/energy control.
 - [ ] Add calibrated battery voltage/current monitoring if supported by the hardware.
@@ -341,7 +341,7 @@ These are outstanding milestones, not completed features or a release schedule. 
 ### 4. Future autonomy
 
 - [ ] Define launch detection, automatic takeoff throttle/pitch/climb sequencing, aborts and pilot override.
-- [ ] Develop and validate altitude/airspeed energy control, heading/track control and navigation health.
+- [ ] Validate magnetic heading hold on the airframe; develop altitude/airspeed energy control, track control and navigation health.
 - [ ] Add loiter, waypoints and RTH with explicit link/navigation failure policies and flight testing.
 - [ ] Evaluate automatic landing after navigation and energy control are qualified.
 - [ ] Add a documented ground-station protocol, potentially MAVLink, with commands and parameter handling.

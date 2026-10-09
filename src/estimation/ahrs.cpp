@@ -169,6 +169,15 @@ float yaw_rad()
     return std::atan2(2.0f * (w*z + x*y), 1.0f - 2.0f * (y*y + z*z));
 }
 
+void correct_yaw(float delta) {
+    if(!valid()||!std::isfinite(delta)) return;
+    const float c=std::cos(delta*.5f),s=std::sin(delta*.5f);
+    const float w=s_q[0],x=s_q[1],y=s_q[2],z=s_q[3];
+    s_q[0]=c*w-s*z; s_q[1]=c*x-s*y;
+    s_q[2]=c*y+s*x; s_q[3]=c*z+s*w;
+    normalize();
+}
+
 void gyro_bias_dps(float& bx, float& by, float& bz)
 {
     bx = s_bias[0] * kRad2Deg;

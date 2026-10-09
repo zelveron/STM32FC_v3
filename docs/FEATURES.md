@@ -24,7 +24,7 @@ This catalog describes the **implemented STM32FC_v3 development firmware for PCB
 - **Software filtering:** configurable 30 Hz gyro and 15 Hz acceleration first-order LPFs; optional validated-frequency gyro notch, disabled until measured.
 - **Explicit mounting rotation:** both IMUs are mapped to aircraft forward/right/down axes, with a proper-rotation check. Default orientation is components up, nose toward the Y2/left side of the unrotated PCB view.
 - **Specific-force convention correction:** accelerometer sign is converted to the estimator's gravity-like convention; level stationary input is about +1 g on Z.
-- **Quaternion attitude:** roll, pitch and relative yaw are derived from a normalized quaternion, avoiding Euler integration singularities.
+- **Quaternion attitude:** roll, pitch and yaw are derived from a normalized quaternion, avoiding Euler integration singularities. Qualified calibrated BMM350 supplies the magnetic yaw reference; gyro fallback can drift.
 - **Gravity correction with trust gating:** Mahony-style accelerometer correction weakens during acceleration or rotation; gyro integration continues when acceleration is not trusted.
 - **Residual gyro-bias learning:** additional quiet-window, magnitude/rate/innovation gates and +/-3 deg/s bound protect learning from maneuvers. Gravity correction includes a direction-innovation gate and rejects body rates at/above 3 deg/s.
 - **Primary/backup selection:** U4 is preferred; a healthy calibrated U7 can take over when U4 fails. Attitude is retained and old residual bias cleared. Selection does not automatically return to U4 during that boot.
@@ -66,15 +66,15 @@ This catalog describes the **implemented STM32FC_v3 development firmware for PCB
 
 - Roll stick commands bank angle, approximately **+/-40 degrees**.
 - Pitch stick commands pitch angle, approximately **+/-26 degrees**.
-- Centered roll/pitch sticks request level roll and configured pitch trim (initially zero).
-- Pilot rudder remains direct, with bounded yaw damping that releases sustained natural turns; full rudder overrides the damping contribution. No heading hold or verified sideslip control.
+- Centered roll/pitch sticks request level roll and configured pitch trim (initially zero), except when eligible magnetic heading hold requests bank.
+- Pilot rudder remains direct, with bounded yaw damping that releases sustained natural turns; full rudder overrides the damping contribution. Calibrated BMM350 enables centered-stick heading hold through bank control; no verified sideslip control.
 - Throttle stays under direct pilot control.
 - Wrapped attitude error generates Euler-rate requests transformed to body rates, including bank/pitch turn coupling. Roll/pitch demand acceleration limits are 600/400 deg/s²; rate controllers feed the common mixer.
 - PID controllers include feedforward, output/integrator limits, anti-windup and filtered measurement derivative support. Default derivative gains are not an airframe-tuned feature.
 - Mode entry uses a 0.25-second smooth blend from previous outputs. A configurable 12 normalized units/s command slew ceiling follows; applied-command feedback prevents integration farther into downstream limits. Throttle bypasses smoothing.
 - Integration eligibility uses debounced throttle/GNSS/barometer evidence, persists through glides/failsafe, clears on explicit disarm or corroborated landing, and clears integrators while ineligible. See [control details](CONTROL_AND_TUNING.md); it remains a heuristic.
 - Measured body rates provide turn geometry without a pitot. A bounded airspeed-scaling/coordination input exists but remains inactive on this hardware; GPS speed is never substituted for airspeed.
-- No altitude, airspeed, position, track or heading hold; no envelope or stall protection.
+- No altitude, airspeed, position or track hold; no envelope or stall protection. Magnetic heading hold requires armed/airborne eligibility, settled centered roll/rudder and a qualified compass.
 
 ## TKOFF takeoff assistance
 
@@ -138,8 +138,8 @@ This catalog describes the **implemented STM32FC_v3 development firmware for PCB
   Stage codes: 0 ready/not started, 1 bus setup, 2 Bosch initialization,
   3 interrupt configuration, 4 interrupt enable, 5 rate/averaging, 6 axes,
   7 normal mode, 8 status read, 9 sample read and 10 nonfinite sample.
-- Raw aircraft-uncalibrated magnetic axes over USB for future calibration/testing.
-- Not fused into heading until the board supply is fixed and mounting, hard/soft-iron calibration and motor-interference rejection are validated.
+- Original compensated sensor axes remain on `MAG` for calibration/testing; `YAW_STATUS` reports the actual heading source, validation reason and hold target.
+- Gated magnetic yaw fusion and ASSIST heading hold are implemented. The offline calibration tool fits mounting and hard/soft iron from rotation captures. No measured installation calibration is assumed; see [MAGNETIC_HEADING.md](MAGNETIC_HEADING.md).
 
 ## Outputs, timing and storage
 

@@ -128,5 +128,23 @@ class TelemetryTests(unittest.TestCase):
         self.assertLessEqual(len(self.m.track),1200)
         self.assertLessEqual(len(self.m.records),20)
 
+    def test_explicit_yaw_source_and_heading_hold(self):
+        self.populate()
+        self.assertTrue(self.m.feed("YAW_STATUS,source=BMM350,valid=1,reason=tracking,heading=359,mag_heading=359,field=50,innovation=-1,configured=1,hold=1,target=1"))
+        self.assertEqual(self.m.get("YAW_STATUS")["source"],"BMM350")
+        self.assertTrue(self.m.get("YAW_STATUS")["hold"])
+        self.assertTrue(self.m.feed("YAW_STATUS,source=GYRO,valid=0,reason=field_rejected,heading=359,mag_heading=150,field=100,innovation=151,configured=1,hold=0,target=0"))
+        self.assertFalse(self.m.get("YAW_STATUS")["valid"])
+        self.now+=3.1; self.assertIsNone(self.m.get("YAW_STATUS"))
+
+    def test_malformed_heading_status_does_not_replace_source(self):
+        valid="YAW_STATUS,source=BMM350,valid=1,reason=tracking,heading=12,mag_heading=12,field=50,innovation=0,configured=1,hold=1,target=12"
+        self.assertTrue(self.m.feed(valid))
+        for line in (valid.replace("BMM350","GPS"),valid.replace("BMM350","GYRO"),valid.replace("heading=12","heading=nan"),
+                     valid.replace("configured=1","configured=0"),valid.replace("field=50","field=-1"),valid.replace("valid=1","valid=0"),
+                     valid.replace("valid=1","valid=0").replace("hold=1","hold=0").replace("reason=tracking","reason=field_rejected")):
+            before=self.m.get("YAW_STATUS")
+            self.assertFalse(self.m.feed(line)); self.assertEqual(self.m.get("YAW_STATUS"),before)
+
 
 if __name__=="__main__": unittest.main()

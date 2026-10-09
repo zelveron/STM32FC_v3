@@ -31,7 +31,7 @@ These checks cannot prove that an aircraft has landed. The operator must only re
 
 ## Select, program and verify
 
-The current Raspberry Pi-connected card was identified by the user on 2026-10-08 as **BMI270**. Use the default `v2_bmi270` profile, which preserves disabled magnetometer support and motor inhibition. BMI270 is the only supported IMU configuration.
+The current Raspberry Pi-connected card was identified by the user on 2026-10-08 as **BMI270**. Use the default `v2_bmi270` profile, which enables BMM350 acquisition and preserves motor inhibition. Magnetic fusion requires [measured compass calibration](MAGNETIC_HEADING.md). BMI270 is the only supported IMU configuration.
 
 ```text
 pio run -e v2_bmi270

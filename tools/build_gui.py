@@ -131,6 +131,8 @@ def prepare():
         for path in [*(REPO / "tools").glob("gui*"), REPO / "tools/enter_dfu.py",
                      REPO / "tools/build_gui.py", REPO / "tools/STM32FC-GUI.spec",
                      REPO / "docs/GUI_WINDOWS.md", REPO / "docs/GUI_THIRD_PARTY.txt",
+                     REPO / "docs/MAGNETIC_HEADING.md", REPO / "tools/calibrate_mag.py",
+                     REPO / "tools/calibration-requirements.txt", REPO / "tests/mag_calibration.py",
                      REPO / "tests/gui_parser.py", REPO / "tests/gui_connection.py",
                      REPO / "tests/gui_ui.py", REPO / "tests/dfu_helper.py"]:
             if path.is_file():
@@ -170,6 +172,7 @@ def main():
         z.write(exe, exe.name)
         z.write(dist / "STM32FC-GUI.exe.sha256", "STM32FC-GUI.exe.sha256")
         z.write(REPO / "docs/GUI_WINDOWS.md", "README.md")
+        z.write(REPO / "docs/MAGNETIC_HEADING.md", "MAGNETIC_HEADING.md")
         z.write(ASSETS / "build-info.json", "build-info.json")
         for folder in ("licenses", "sources"):
             for path in sorted((ASSETS / folder).rglob("*")):

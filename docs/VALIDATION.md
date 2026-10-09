@@ -1,13 +1,30 @@
 # Validation and acceptance status
 
-Current evidence is in [the 2026-10-08 assembled-board record](ASSEMBLED_BOARD.md).
-The Windows session verified both BMI270s, BMP581, GNSS communication/fix,
-ER8 reception and outgoing CRSF telemetry counters. BMM350 I2C communication
-remains unresolved. The current full host suite and eight BMM350 diagnostics
-checks pass; 40 GUI/parser/serial/DFU tests and real Qt widget/package smoke
-tests pass. `v2_flight` enables motor authorization but does not add flight
-qualification. The September results below are historical; their statements
-about untested hardware and the former Tk GUI describe that date only.
+Hardware evidence is in [the 2026-10-08 assembled-board record](ASSEMBLED_BOARD.md).
+That Windows session verified both BMI270s, BMP581, GNSS communication/fix,
+ER8 reception and outgoing CRSF telemetry counters. The user reports BMM350
+online as of 2026-10-09. No new hardware or flight tests were performed for
+the magnetic-heading software change; installation calibration is still pending.
+
+## 2026-10-09 magnetic-heading software checks
+
+| Check | Result |
+|---|---|
+| Complete Linux GCC host suite, `tools/test_host.py` | 366 C/C++ checks PASS; includes 34 magnetic-heading checks, production application integration and simulated heading recovery |
+| Python parser / connection / Qt UI / DFU tests | 44 PASS |
+| Offline magnetic calibration / existing log-tool tests | 6 + 10 PASS |
+| ARM `v2`, `v2_bmi270`, `v2_flight` | All compile and link; no board flashed |
+| Qt source GUI self-test and visual preview | Five pages rendered offscreen; source/hold/fallback status checked; no serial connection opened |
+
+ARM images use 49,452 bytes of RAM and at most 145,976 bytes of flash.
+The Windows workflow includes the new firmware and calibration tests but
+was not run in this Raspberry Pi session; no new Windows EXE was released.
+Magnetic tests use synthetic observations, and aircraft simulation is not
+an identified model of this airframe. See [MAGNETIC_HEADING.md](MAGNETIC_HEADING.md).
+
+`v2_flight` enables motor authorization but does not add flight qualification.
+The September results below are historical; their statements about untested
+hardware and the former Tk GUI describe that date only.
 
 Date: 2026-09-28. Starting revision: `3daf518b5e1759f63fb84008d8d34c5e17c0dda6` from STM32FC_v2. These results cover the firmware carried into STM32FC_v3 for the v2.2 PCB. **No board was flashed, no physical hardware test was performed, and no flight was conducted.**
 
@@ -102,4 +119,4 @@ Record results and measured values for each step. The following work is outstand
 
 Verify mechanical control signs, throws, CG, trim, servo supply capacity, airspeed/stall behavior and ESC operation for the actual aircraft. Gains and slew limits require controlled tuning and a staged flight-test process with an experienced pilot. Validate MANUAL before depending on stabilization, then characterize ASSIST/TKOFF and failure transitions. Centered pitch in ASSIST/failsafe is not a tested best-glide or stall-protection command.
 
-The present firmware provides no return-to-home or navigation rescue. BMM350 magnetic calibration/fusion, airspeed sensing, navigation estimation and physical logging qualification remain outstanding. A second IMU is useful but does not qualify the system to tolerate arbitrary single failures.
+The present firmware provides no return-to-home or navigation rescue. BMM350 magnetic calibration/fusion and ASSIST heading hold are now implemented (see [MAGNETIC_HEADING.md](MAGNETIC_HEADING.md)); measured installation calibration and airframe validation remain outstanding, along with airspeed sensing, navigation estimation and physical logging qualification. A second IMU is useful but does not qualify the system to tolerate arbitrary single failures.

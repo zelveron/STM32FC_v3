@@ -3,12 +3,18 @@
 #include "../control/command_shape.hpp"
 #include "../control/mixer.hpp"
 #include "../core/telemetry_schedule.hpp"
+#include "magnetometer.hpp"
 namespace config {
 #ifndef FC_MAG_ENABLED
 #define FC_MAG_ENABLED 1
 #endif
 constexpr const char* imu_model = "BMI270";
 constexpr bool enable_magnetometer = FC_MAG_ENABLED != 0;
+constexpr estimation::MagHeadingConfig mag_heading_config() {
+    auto c=magnetic_calibration;
+    c.enabled=enable_magnetometer;
+    return c;
+}
 constexpr control::AssistTuning assist_tuning{};
 constexpr core::TelemConfig telemetry{}; // per-type enable/interval and CRSF byte budget
 constexpr float gyro_lpf_hz=30, accel_lpf_hz=15;

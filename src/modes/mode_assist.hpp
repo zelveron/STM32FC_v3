@@ -7,6 +7,8 @@
 //   pitch stick -> target pitch (+/- max_pitch_rad)
 //   yaw stick   -> direct rudder with bounded transient yaw damping
 //   throttle    -> passthrough
+// Centered roll/rudder capture magnetic heading after the turn settles.
+// Hold uses a limited bank demand; pilot input or loss of heading releases it.
 //
 // The rate-loop outputs go through the SAME mixer as MANUAL (output map,
 // flaperon / differential-thrust scaffolding).
@@ -37,6 +39,9 @@ public:
     void set_tuning(const control::AssistTuning& t) { _tuning=t; _transition.configure(t.surface_rate_per_s,t.transition_s); }
     float demand_p() const { return _dp; }
     float demand_q() const { return _dq; }
+    bool heading_hold() const { return _holding; }
+    float heading_target_rad() const { return _heading_target; }
+    float roll_target_rad() const { return _roll_target; }
 
     // diagnostics
     const control::RateController& rate_ctrl() const { return _rate; }
@@ -51,6 +56,8 @@ private:
     control::RateDemand _roll_demand,_pitch_demand;
     bool _seed=true;
     float _heading_slow=0,_dp=0,_dq=0;
+    bool _holding=false;
+    float _heading_target=0,_capture_s=0,_roll_target=0;
 };
 
 } // namespace modes
